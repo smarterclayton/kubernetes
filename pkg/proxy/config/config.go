@@ -18,9 +18,9 @@ package config
 
 import (
 	"sync"
-	"time"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/util/config"
 	"github.com/golang/glog"
 )
 
@@ -65,248 +65,192 @@ type EndpointsConfigHandler interface {
 	OnUpdate(endpoints []api.Endpoints)
 }
 
-type ServiceConfig struct {
-	// Configuration sources and their lock.
-	configSourceLock       sync.RWMutex
-	serviceConfigSources   map[string]chan ServiceUpdate
-	endpointsConfigSources map[string]chan EndpointsUpdate
-
-	// Handlers for changes to services and endpoints and their lock.
-	handlerLock      sync.RWMutex
-	serviceHandlers  []ServiceConfigHandler
-	endpointHandlers []EndpointsConfigHandler
-
-	// Last known configuration for union of the sources and the locks. Map goes
-	// from each source to array of services/endpoints that have been configured
-	// through that channel.
-	configLock     sync.RWMutex
-	serviceConfig  map[string]map[string]api.Service
-	endpointConfig map[string]map[string]api.Endpoints
-
-	// Channel that service configuration source listeners use to signal of new
-	// configurations.
-	// Value written is the source of the change.
-	serviceNotifyChannel chan string
-
-	// Channel that endpoint configuration source listeners use to signal of new
-	// configurations.
-	// Value written is the source of the change.
-	endpointsNotifyChannel chan string
+type EndpointsConfig struct {
+	mux     *config.Mux
+	watcher *config.Watcher
+	store   *endpointsStore
 }
 
-func NewServiceConfig() *ServiceConfig {
-	config := &ServiceConfig{
-		serviceConfigSources:   make(map[string]chan ServiceUpdate),
-		endpointsConfigSources: make(map[string]chan EndpointsUpdate),
-		serviceHandlers:        make([]ServiceConfigHandler, 10),
-		endpointHandlers:       make([]EndpointsConfigHandler, 10),
-		serviceConfig:          make(map[string]map[string]api.Service),
-		endpointConfig:         make(map[string]map[string]api.Endpoints),
-		serviceNotifyChannel:   make(chan string),
-		endpointsNotifyChannel: make(chan string),
-	}
-	go config.Run()
-	return config
+func NewEndpointsConfig() *EndpointsConfig {
+	updates := make(chan struct{})
+	store := &endpointsStore{updates: updates, endpoints: make(map[string]map[string]api.Endpoints)}
+	mux := config.NewMux(store)
+	watcher := config.NewWatcher()
+	go watchForUpdates(watcher, store, updates)
+	return &EndpointsConfig{mux, watcher, store}
 }
 
-func (impl *ServiceConfig) Run() {
-	glog.Infof("Starting the config Run loop")
-	for {
-		select {
-		case source := <-impl.serviceNotifyChannel:
-			glog.Infof("Got new service configuration from source %s", source)
-			impl.NotifyServiceUpdate()
-		case source := <-impl.endpointsNotifyChannel:
-			glog.Infof("Got new endpoint configuration from source %s", source)
-			impl.NotifyEndpointsUpdate()
-		case <-time.After(1 * time.Second):
+func (c *EndpointsConfig) RegisterHandler(handler EndpointsConfigHandler) {
+	c.watcher.Add(config.ListenerFunc(func(instance interface{}) {
+		handler.OnUpdate(instance.([]api.Endpoints))
+	}))
+}
+
+func (c *EndpointsConfig) SourceChannel(source string) chan EndpointsUpdate {
+	ch := c.mux.SourceChannel(source)
+	endpointsCh := make(chan EndpointsUpdate)
+	go func() {
+		for update := range endpointsCh {
+			ch <- update
 		}
-	}
+		close(ch)
+	}()
+	return endpointsCh
 }
 
-func (impl *ServiceConfig) ServiceChannelListener(source string, listenChannel chan ServiceUpdate) {
-	// Represents the current services configuration for this channel.
-	serviceMap := make(map[string]api.Service)
-	for {
-		select {
-		case update := <-listenChannel:
-			impl.configLock.Lock()
-			switch update.Op {
-			case ADD:
-				glog.Infof("Adding new service from source %s : %v", source, update.Services)
-				for _, value := range update.Services {
-					serviceMap[value.ID] = value
-				}
-			case REMOVE:
-				glog.Infof("Removing a service %v", update)
-				for _, value := range update.Services {
-					delete(serviceMap, value.ID)
-				}
-			case SET:
-				glog.Infof("Setting services %v", update)
-				// Clear the old map entries by just creating a new map
-				serviceMap = make(map[string]api.Service)
-				for _, value := range update.Services {
-					serviceMap[value.ID] = value
-				}
-			default:
-				glog.Infof("Received invalid update type: %v", update)
-				continue
-			}
-			impl.serviceConfig[source] = serviceMap
-			impl.configLock.Unlock()
-			impl.serviceNotifyChannel <- source
+func (c *EndpointsConfig) Config() map[string]map[string]api.Endpoints {
+	return c.store.Object().(map[string]map[string]api.Endpoints)
+}
+
+type endpointsStore struct {
+	endpointLock sync.RWMutex
+	endpoints    map[string]map[string]api.Endpoints
+	updates      chan<- struct{}
+}
+
+func (s *endpointsStore) Merge(source string, change interface{}) error {
+	s.endpointLock.Lock()
+	endpoints := s.endpoints[source]
+	if endpoints == nil {
+		endpoints = make(map[string]api.Endpoints)
+	}
+	update := change.(EndpointsUpdate)
+	switch update.Op {
+	case ADD:
+		glog.Infof("Adding new endpoint from source %s : %v", source, update.Endpoints)
+		for _, value := range update.Endpoints {
+			endpoints[value.Name] = value
 		}
-	}
-}
-
-func (impl *ServiceConfig) EndpointsChannelListener(source string, listenChannel chan EndpointsUpdate) {
-	endpointMap := make(map[string]api.Endpoints)
-	for {
-		select {
-		case update := <-listenChannel:
-			impl.configLock.Lock()
-			switch update.Op {
-			case ADD:
-				glog.Infof("Adding a new endpoint %v", update)
-				for _, value := range update.Endpoints {
-					endpointMap[value.Name] = value
-				}
-			case REMOVE:
-				glog.Infof("Removing an endpoint %v", update)
-				for _, value := range update.Endpoints {
-					delete(endpointMap, value.Name)
-				}
-
-			case SET:
-				glog.Infof("Setting services %v", update)
-				// Clear the old map entries by just creating a new map
-				endpointMap = make(map[string]api.Endpoints)
-				for _, value := range update.Endpoints {
-					endpointMap[value.Name] = value
-				}
-			default:
-				glog.Infof("Received invalid update type: %v", update)
-				continue
-			}
-			impl.endpointConfig[source] = endpointMap
-			impl.configLock.Unlock()
-			impl.endpointsNotifyChannel <- source
+	case REMOVE:
+		glog.Infof("Removing an endpoint %v", update)
+		for _, value := range update.Endpoints {
+			delete(endpoints, value.Name)
 		}
-
-	}
-}
-
-// GetServiceConfigurationChannel returns a channel where a configuration source
-// can send updates of new service configurations. Multiple calls with the same
-// source will return the same channel. This allows change and state based sources
-// to use the same channel. Difference source names however will be treated as a
-// union.
-func (impl *ServiceConfig) GetServiceConfigurationChannel(source string) chan ServiceUpdate {
-	if len(source) == 0 {
-		panic("GetServiceConfigurationChannel given an empty service name")
-	}
-	impl.configSourceLock.Lock()
-	defer impl.configSourceLock.Unlock()
-	channel, exists := impl.serviceConfigSources[source]
-	if exists {
-		return channel
-	}
-	newChannel := make(chan ServiceUpdate)
-	impl.serviceConfigSources[source] = newChannel
-	go impl.ServiceChannelListener(source, newChannel)
-	return newChannel
-}
-
-// GetEndpointConfigurationChannel returns a channel where a configuration source
-// can send updates of new endpoint configurations. Multiple calls with the same
-// source will return the same channel. This allows change and state based sources
-// to use the same channel. Difference source names however will be treated as a
-// union.
-func (impl *ServiceConfig) GetEndpointsConfigurationChannel(source string) chan EndpointsUpdate {
-	if len(source) == 0 {
-		panic("GetEndpointConfigurationChannel given an empty service name")
-	}
-	impl.configSourceLock.Lock()
-	defer impl.configSourceLock.Unlock()
-	channel, exists := impl.endpointsConfigSources[source]
-	if exists {
-		return channel
-	}
-	newChannel := make(chan EndpointsUpdate)
-	impl.endpointsConfigSources[source] = newChannel
-	go impl.EndpointsChannelListener(source, newChannel)
-	return newChannel
-}
-
-// Register ServiceConfigHandler to receive updates of changes to services.
-func (impl *ServiceConfig) RegisterServiceHandler(handler ServiceConfigHandler) {
-	impl.handlerLock.Lock()
-	defer impl.handlerLock.Unlock()
-	for i, h := range impl.serviceHandlers {
-		if h == nil {
-			impl.serviceHandlers[i] = handler
-			return
+	case SET:
+		glog.Infof("Setting endpoints %v", update)
+		// Clear the old map entries by just creating a new map
+		endpoints = make(map[string]api.Endpoints)
+		for _, value := range update.Endpoints {
+			endpoints[value.Name] = value
 		}
+	default:
+		glog.Infof("Received invalid update type: %v", update)
 	}
-	// TODO(vaikas): Grow the array here instead of panic.
-	// In practice we are expecting there to be 1 handler anyways,
-	// so not a big deal for now
-	panic("Only up to 10 service handlers supported for now")
+	s.endpoints[source] = endpoints
+	s.endpointLock.Unlock()
+	if s.updates != nil {
+		s.updates <- struct{}{}
+	}
+	return nil
 }
 
-// Register ServiceConfigHandler to receive updates of changes to services.
-func (impl *ServiceConfig) RegisterEndpointsHandler(handler EndpointsConfigHandler) {
-	impl.handlerLock.Lock()
-	defer impl.handlerLock.Unlock()
-	for i, h := range impl.endpointHandlers {
-		if h == nil {
-			impl.endpointHandlers[i] = handler
-			return
-		}
-	}
-	// TODO(vaikas): Grow the array here instead of panic.
-	// In practice we are expecting there to be 1 handler anyways,
-	// so not a big deal for now
-	panic("Only up to 10 endpoint handlers supported for now")
-}
-
-func (impl *ServiceConfig) NotifyServiceUpdate() {
-	services := make([]api.Service, 0)
-	impl.configLock.RLock()
-	for _, sourceServices := range impl.serviceConfig {
-		for _, value := range sourceServices {
-			services = append(services, value)
-		}
-	}
-	impl.configLock.RUnlock()
-	glog.Infof("Unified configuration %+v", services)
-	impl.handlerLock.RLock()
-	handlers := impl.serviceHandlers
-	impl.handlerLock.RUnlock()
-	for _, handler := range handlers {
-		if handler != nil {
-			handler.OnUpdate(services)
-		}
-	}
-}
-
-func (impl *ServiceConfig) NotifyEndpointsUpdate() {
+func (s *endpointsStore) Object() interface{} {
+	s.endpointLock.RLock()
 	endpoints := make([]api.Endpoints, 0)
-	impl.configLock.RLock()
-	for _, sourceEndpoints := range impl.endpointConfig {
+	for _, sourceEndpoints := range s.endpoints {
 		for _, value := range sourceEndpoints {
 			endpoints = append(endpoints, value)
 		}
 	}
-	impl.configLock.RUnlock()
-	glog.Infof("Unified configuration %+v", endpoints)
-	impl.handlerLock.RLock()
-	handlers := impl.endpointHandlers
-	impl.handlerLock.RUnlock()
-	for _, handler := range handlers {
-		if handler != nil {
-			handler.OnUpdate(endpoints)
+	s.endpointLock.RUnlock()
+	return endpoints
+}
+
+type ServiceConfig struct {
+	mux     *config.Mux
+	watcher *config.Watcher
+	store   *serviceStore
+}
+
+func NewServiceConfig() *ServiceConfig {
+	updates := make(chan struct{})
+	store := &serviceStore{updates: updates, services: make(map[string]map[string]api.Service)}
+	mux := config.NewMux(store)
+	watcher := config.NewWatcher()
+	go watchForUpdates(watcher, store, updates)
+	return &ServiceConfig{mux, watcher, store}
+}
+
+func (c *ServiceConfig) RegisterHandler(handler ServiceConfigHandler) {
+	c.watcher.Add(config.ListenerFunc(func(instance interface{}) {
+		handler.OnUpdate(instance.([]api.Service))
+	}))
+}
+
+func (c *ServiceConfig) SourceChannel(source string) chan ServiceUpdate {
+	ch := c.mux.SourceChannel(source)
+	serviceCh := make(chan ServiceUpdate)
+	go func() {
+		for update := range serviceCh {
+			ch <- update
 		}
+		close(ch)
+	}()
+	return serviceCh
+}
+
+func (c *ServiceConfig) Config() map[string]map[string]api.Service {
+	return c.store.Object().(map[string]map[string]api.Service)
+}
+
+type serviceStore struct {
+	serviceLock sync.RWMutex
+	services    map[string]map[string]api.Service
+	updates     chan<- struct{}
+}
+
+func (s *serviceStore) Merge(source string, change interface{}) error {
+	s.serviceLock.Lock()
+	services := s.services[source]
+	if services == nil {
+		services = make(map[string]api.Service)
+	}
+	update := change.(ServiceUpdate)
+	switch update.Op {
+	case ADD:
+		glog.Infof("Adding new service from source %s : %v", source, update.Services)
+		for _, value := range update.Services {
+			services[value.ID] = value
+		}
+	case REMOVE:
+		glog.Infof("Removing a service %v", update)
+		for _, value := range update.Services {
+			delete(services, value.ID)
+		}
+	case SET:
+		glog.Infof("Setting services %v", update)
+		// Clear the old map entries by just creating a new map
+		services = make(map[string]api.Service)
+		for _, value := range update.Services {
+			services[value.ID] = value
+		}
+	default:
+		glog.Infof("Received invalid update type: %v", update)
+	}
+	s.services[source] = services
+	s.serviceLock.Unlock()
+	if s.updates != nil {
+		s.updates <- struct{}{}
+	}
+	return nil
+}
+
+func (s *serviceStore) Object() interface{} {
+	s.serviceLock.RLock()
+	services := make([]api.Service, 0)
+	for _, sourceServices := range s.services {
+		for _, value := range sourceServices {
+			services = append(services, value)
+		}
+	}
+	s.serviceLock.RUnlock()
+	return services
+}
+
+// watchForUpdates invokes watcher.Notify() with the latest version of an object
+// when changes occur.
+func watchForUpdates(watcher *config.Watcher, accessor config.Accessor, updates <-chan struct{}) {
+	for _ = range updates {
+		watcher.Notify(accessor.Object())
 	}
 }
