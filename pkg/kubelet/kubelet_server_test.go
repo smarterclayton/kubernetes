@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"sync"
 	"testing"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
@@ -47,6 +48,32 @@ func (fk *fakeKubelet) GetContainerStats(podID, containerName string) (*api.Cont
 
 func (fk *fakeKubelet) GetMachineStats() (*api.ContainerStats, error) {
 	return fk.machineStatsFunc()
+}
+
+type channelReader struct {
+	list [][]api.ContainerManifest
+	wg   sync.WaitGroup
+}
+
+func startReading(channel <-chan manifestUpdate) *channelReader {
+	cr := &channelReader{}
+	cr.wg.Add(1)
+	go func() {
+		for {
+			update, ok := <-channel
+			if !ok {
+				break
+			}
+			cr.list = append(cr.list, update.manifests)
+		}
+		cr.wg.Done()
+	}()
+	return cr
+}
+
+func (cr *channelReader) GetList() [][]api.ContainerManifest {
+	cr.wg.Wait()
+	return cr.list
 }
 
 type serverTestFramework struct {

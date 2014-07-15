@@ -19,15 +19,11 @@ package kubelet
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
-	"net/http/httptest"
 	"reflect"
-	"sync"
 	"testing"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/coreos/go-etcd/etcd"
 	"github.com/fsouza/go-dockerclient"
 	"github.com/google/cadvisor/info"
@@ -38,41 +34,6 @@ import (
 func expectNoError(t *testing.T, err error) {
 	if err != nil {
 		t.Errorf("Unexpected error: %#v", err)
-	}
-}
-
-// These are used for testing extract json (below)
-type TestData struct {
-	Value  string
-	Number int
-}
-
-type TestObject struct {
-	Name string
-	Data TestData
-}
-
-func verifyStringEquals(t *testing.T, actual, expected string) {
-	if actual != expected {
-		t.Errorf("Verification failed.  Expected: %s, Found %s", expected, actual)
-	}
-}
-
-func verifyIntEquals(t *testing.T, actual, expected int) {
-	if actual != expected {
-		t.Errorf("Verification failed.  Expected: %d, Found %d", expected, actual)
-	}
-}
-
-func verifyNoError(t *testing.T, e error) {
-	if e != nil {
-		t.Errorf("Expected no error, found %#v", e)
-	}
-}
-
-func verifyError(t *testing.T, e error) {
-	if e == nil {
-		t.Errorf("Expected error, found nil")
 	}
 }
 
@@ -87,17 +48,6 @@ func makeTestKubelet(t *testing.T) (*Kubelet, *tools.FakeEtcdClient, *FakeDocker
 	kubelet.DockerPuller = &FakeDockerPuller{}
 	kubelet.EtcdClient = fakeEtcdClient
 	return kubelet, fakeEtcdClient, fakeDocker
-}
-
-func TestExtractJSON(t *testing.T) {
-	obj := TestObject{}
-	kubelet, _, _ := makeTestKubelet(t)
-	data := `{ "name": "foo", "data": { "value": "bar", "number": 10 } }`
-	kubelet.ExtractYAMLData([]byte(data), &obj)
-
-	verifyStringEquals(t, obj.Name, "foo")
-	verifyStringEquals(t, obj.Data.Value, "bar")
-	verifyIntEquals(t, obj.Data.Number, 10)
 }
 
 func verifyCalls(t *testing.T, fakeDocker *FakeDockerClient, calls []string) {
@@ -126,12 +76,6 @@ func verifyPackUnpack(t *testing.T, manifestID, containerName string) {
 	returnedManifestID, returnedContainerName := parseDockerName(name)
 	if manifestID != returnedManifestID || containerName != returnedContainerName {
 		t.Errorf("For (%s, %s), unpacked (%s, %s)", manifestID, containerName, returnedManifestID, returnedContainerName)
-	}
-}
-
-func verifyBoolean(t *testing.T, expected, value bool) {
-	if expected != value {
-		t.Errorf("Unexpected boolean.  Expected %s.  Found %s", expected, value)
 	}
 }
 
@@ -200,7 +144,9 @@ func TestKillContainerWithError(t *testing.T) {
 	kubelet, _, _ := makeTestKubelet(t)
 	kubelet.DockerClient = fakeDocker
 	err := kubelet.killContainer(fakeDocker.containerList[0])
-	verifyError(t, err)
+	if err == nil {
+		t.Errorf("Expected error, found nil")
+	}
 	verifyCalls(t, fakeDocker, []string{"stop"})
 }
 
@@ -221,7 +167,9 @@ func TestKillContainer(t *testing.T) {
 	}
 
 	err := kubelet.killContainer(fakeDocker.containerList[0])
-	verifyNoError(t, err)
+	if err != nil {
+		t.Errorf("Expected no error, found %#v", err)
+	}
 	verifyCalls(t, fakeDocker, []string{"stop"})
 }
 
@@ -233,126 +181,6 @@ func TestResponseToContainersNil(t *testing.T) {
 	}
 	if err == nil {
 		t.Error("Unexpected non-error")
-	}
-}
-
-func TestResponseToManifests(t *testing.T) {
-	kubelet, _, _ := makeTestKubelet(t)
-	list, err := kubelet.ResponseToManifests(&etcd.Response{
-		Node: &etcd.Node{
-			Value: util.MakeJSONString([]api.ContainerManifest{
-				{ID: "foo"},
-				{ID: "bar"},
-			}),
-		},
-	})
-	if len(list) != 2 || list[0].ID != "foo" || list[1].ID != "bar" {
-		t.Errorf("Unexpected list: %#v", list)
-	}
-	expectNoError(t, err)
-}
-
-type channelReader struct {
-	list [][]api.ContainerManifest
-	wg   sync.WaitGroup
-}
-
-func startReading(channel <-chan manifestUpdate) *channelReader {
-	cr := &channelReader{}
-	cr.wg.Add(1)
-	go func() {
-		for {
-			update, ok := <-channel
-			if !ok {
-				break
-			}
-			cr.list = append(cr.list, update.manifests)
-		}
-		cr.wg.Done()
-	}()
-	return cr
-}
-
-func (cr *channelReader) GetList() [][]api.ContainerManifest {
-	cr.wg.Wait()
-	return cr.list
-}
-
-func TestGetKubeletStateFromEtcdNoData(t *testing.T) {
-	kubelet, fakeClient, _ := makeTestKubelet(t)
-	channel := make(chan manifestUpdate)
-	reader := startReading(channel)
-	fakeClient.Data["/registry/hosts/machine/kubelet"] = tools.EtcdResponseWithError{
-		R: &etcd.Response{},
-		E: nil,
-	}
-	err := kubelet.getKubeletStateFromEtcd("/registry/hosts/machine/kubelet", channel)
-	if err == nil {
-		t.Error("Unexpected no err.")
-	}
-	close(channel)
-	list := reader.GetList()
-	if len(list) != 0 {
-		t.Errorf("Unexpected list: %#v", list)
-	}
-}
-
-func TestGetKubeletStateFromEtcd(t *testing.T) {
-	kubelet, fakeClient, _ := makeTestKubelet(t)
-	channel := make(chan manifestUpdate)
-	reader := startReading(channel)
-	fakeClient.Data["/registry/hosts/machine/kubelet"] = tools.EtcdResponseWithError{
-		R: &etcd.Response{
-			Node: &etcd.Node{
-				Value: util.MakeJSONString([]api.Container{}),
-			},
-		},
-		E: nil,
-	}
-	err := kubelet.getKubeletStateFromEtcd("/registry/hosts/machine/kubelet", channel)
-	expectNoError(t, err)
-	close(channel)
-	list := reader.GetList()
-	if len(list) != 1 {
-		t.Errorf("Unexpected list: %#v", list)
-	}
-}
-
-func TestGetKubeletStateFromEtcdNotFound(t *testing.T) {
-	kubelet, fakeClient, _ := makeTestKubelet(t)
-	channel := make(chan manifestUpdate)
-	reader := startReading(channel)
-	fakeClient.Data["/registry/hosts/machine/kubelet"] = tools.EtcdResponseWithError{
-		R: &etcd.Response{},
-		E: tools.EtcdErrorNotFound,
-	}
-	err := kubelet.getKubeletStateFromEtcd("/registry/hosts/machine/kubelet", channel)
-	expectNoError(t, err)
-	close(channel)
-	list := reader.GetList()
-	if len(list) != 0 {
-		t.Errorf("Unexpected list: %#v", list)
-	}
-}
-
-func TestGetKubeletStateFromEtcdError(t *testing.T) {
-	kubelet, fakeClient, _ := makeTestKubelet(t)
-	channel := make(chan manifestUpdate)
-	reader := startReading(channel)
-	fakeClient.Data["/registry/hosts/machine/kubelet"] = tools.EtcdResponseWithError{
-		R: &etcd.Response{},
-		E: &etcd.EtcdError{
-			ErrorCode: 200, // non not found error
-		},
-	}
-	err := kubelet.getKubeletStateFromEtcd("/registry/hosts/machine/kubelet", channel)
-	if err == nil {
-		t.Error("Unexpected non-error")
-	}
-	close(channel)
-	list := reader.GetList()
-	if len(list) != 0 {
-		t.Errorf("Unexpected list: %#v", list)
 	}
 }
 
@@ -657,252 +485,6 @@ func TestCheckHostPortConflicts(t *testing.T) {
 	}
 	if errs := checkHostPortConflicts(failureCaseAll, &failureCaseNew); len(errs) == 0 {
 		t.Errorf("Expected failure")
-	}
-}
-
-func TestExtractFromNonExistentFile(t *testing.T) {
-	kubelet := New()
-	_, err := kubelet.extractFromFile("/some/fake/file")
-	if err == nil {
-		t.Error("Unexpected non-error.")
-	}
-}
-
-func TestExtractFromBadDataFile(t *testing.T) {
-	kubelet := New()
-
-	badData := []byte{1, 2, 3}
-	file, err := ioutil.TempFile("", "foo")
-	expectNoError(t, err)
-	name := file.Name()
-	file.Close()
-	ioutil.WriteFile(name, badData, 0755)
-	_, err = kubelet.extractFromFile(name)
-
-	if err == nil {
-		t.Error("Unexpected non-error.")
-	}
-}
-
-func TestExtractFromValidDataFile(t *testing.T) {
-	kubelet := New()
-
-	manifest := api.ContainerManifest{ID: "bar"}
-	data, err := json.Marshal(manifest)
-	expectNoError(t, err)
-	file, err := ioutil.TempFile("", "foo")
-	expectNoError(t, err)
-	name := file.Name()
-	expectNoError(t, file.Close())
-	ioutil.WriteFile(name, data, 0755)
-
-	read, err := kubelet.extractFromFile(name)
-	expectNoError(t, err)
-	if !reflect.DeepEqual(read, manifest) {
-		t.Errorf("Unexpected difference.  Expected %#v, got %#v", manifest, read)
-	}
-}
-
-func TestExtractFromEmptyDir(t *testing.T) {
-	kubelet := New()
-
-	dirName, err := ioutil.TempDir("", "foo")
-	expectNoError(t, err)
-
-	_, err = kubelet.extractFromDir(dirName)
-	expectNoError(t, err)
-}
-
-func TestExtractFromDir(t *testing.T) {
-	kubelet := New()
-
-	manifests := []api.ContainerManifest{
-		{ID: "aaaa"},
-		{ID: "bbbb"},
-	}
-
-	dirName, err := ioutil.TempDir("", "foo")
-	expectNoError(t, err)
-
-	for _, manifest := range manifests {
-		data, err := json.Marshal(manifest)
-		expectNoError(t, err)
-		file, err := ioutil.TempFile(dirName, manifest.ID)
-		expectNoError(t, err)
-		name := file.Name()
-		expectNoError(t, file.Close())
-		ioutil.WriteFile(name, data, 0755)
-	}
-
-	read, err := kubelet.extractFromDir(dirName)
-	expectNoError(t, err)
-	if !reflect.DeepEqual(read, manifests) {
-		t.Errorf("Unexpected difference.  Expected %#v, got %#v", manifests, read)
-	}
-}
-
-func TestExtractFromHttpBadness(t *testing.T) {
-	kubelet := New()
-	updateChannel := make(chan manifestUpdate)
-	reader := startReading(updateChannel)
-
-	err := kubelet.extractFromHTTP("http://localhost:12345", updateChannel)
-	if err == nil {
-		t.Error("Unexpected non-error.")
-	}
-	close(updateChannel)
-	list := reader.GetList()
-
-	if len(list) != 0 {
-		t.Errorf("Unexpected list: %#v", list)
-	}
-}
-
-func TestExtractFromHttpSingle(t *testing.T) {
-	kubelet := New()
-	updateChannel := make(chan manifestUpdate)
-	reader := startReading(updateChannel)
-
-	manifests := []api.ContainerManifest{
-		{Version: "v1beta1", ID: "foo"},
-	}
-	// Taking a single-manifest from a URL allows kubelet to be used
-	// in the implementation of google's container VM image.
-	data, err := json.Marshal(manifests[0])
-
-	fakeHandler := util.FakeHandler{
-		StatusCode:   200,
-		ResponseBody: string(data),
-	}
-	testServer := httptest.NewServer(&fakeHandler)
-
-	err = kubelet.extractFromHTTP(testServer.URL, updateChannel)
-	if err != nil {
-		t.Errorf("Unexpected error: %#v", err)
-	}
-	close(updateChannel)
-
-	read := reader.GetList()
-
-	if len(read) != 1 {
-		t.Errorf("Unexpected list: %#v", read)
-		return
-	}
-	if !reflect.DeepEqual(manifests, read[0]) {
-		t.Errorf("Unexpected difference.  Expected: %#v, Saw: %#v", manifests, read[0])
-	}
-}
-
-func TestExtractFromHttpMultiple(t *testing.T) {
-	kubelet := New()
-	updateChannel := make(chan manifestUpdate)
-	reader := startReading(updateChannel)
-
-	manifests := []api.ContainerManifest{
-		{Version: "v1beta1", ID: "foo"},
-		{Version: "v1beta1", ID: "bar"},
-	}
-	data, err := json.Marshal(manifests)
-	if err != nil {
-		t.Fatalf("Some weird json problem: %v", err)
-	}
-
-	t.Logf("Serving: %v", string(data))
-
-	fakeHandler := util.FakeHandler{
-		StatusCode:   200,
-		ResponseBody: string(data),
-	}
-	testServer := httptest.NewServer(&fakeHandler)
-
-	err = kubelet.extractFromHTTP(testServer.URL, updateChannel)
-	if err != nil {
-		t.Errorf("Unexpected error: %#v", err)
-	}
-	close(updateChannel)
-
-	read := reader.GetList()
-
-	if len(read) != 1 {
-		t.Errorf("Unexpected list: %#v", read)
-		return
-	}
-	if !reflect.DeepEqual(manifests, read[0]) {
-		t.Errorf("Unexpected difference.  Expected: %#v, Saw: %#v", manifests, read[0])
-	}
-}
-
-func TestExtractFromHttpEmptyArray(t *testing.T) {
-	kubelet := New()
-	updateChannel := make(chan manifestUpdate)
-	reader := startReading(updateChannel)
-
-	manifests := []api.ContainerManifest{}
-	data, err := json.Marshal(manifests)
-	if err != nil {
-		t.Fatalf("Some weird json problem: %v", err)
-	}
-
-	t.Logf("Serving: %v", string(data))
-
-	fakeHandler := util.FakeHandler{
-		StatusCode:   200,
-		ResponseBody: string(data),
-	}
-	testServer := httptest.NewServer(&fakeHandler)
-
-	err = kubelet.extractFromHTTP(testServer.URL, updateChannel)
-	if err != nil {
-		t.Errorf("Unexpected error: %#v", err)
-	}
-	close(updateChannel)
-
-	read := reader.GetList()
-
-	if len(read) != 1 {
-		t.Errorf("Unexpected list: %#v", read)
-		return
-	}
-	if len(read[0]) != 0 {
-		t.Errorf("Unexpected manifests: %#v", read[0])
-	}
-}
-
-func TestWatchEtcd(t *testing.T) {
-	watchChannel := make(chan *etcd.Response)
-	updateChannel := make(chan manifestUpdate)
-	kubelet := New()
-	reader := startReading(updateChannel)
-
-	manifest := []api.ContainerManifest{
-		{
-			ID: "foo",
-		},
-	}
-	data, err := json.Marshal(manifest)
-	expectNoError(t, err)
-
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		kubelet.WatchEtcd(watchChannel, updateChannel)
-		wg.Done()
-	}()
-
-	watchChannel <- &etcd.Response{
-		Node: &etcd.Node{
-			Value: string(data),
-		},
-	}
-	close(watchChannel)
-	wg.Wait()
-	close(updateChannel)
-
-	read := reader.GetList()
-	if len(read) != 1 {
-		t.Errorf("Expected number of results: %v", len(read))
-	} else if !reflect.DeepEqual(read[0], manifest) {
-		t.Errorf("Unexpected manifest(s) %#v %#v", read[0], manifest)
 	}
 }
 
