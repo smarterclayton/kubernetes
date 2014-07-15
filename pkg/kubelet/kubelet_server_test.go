@@ -34,7 +34,7 @@ import (
 
 type fakeKubelet struct {
 	infoFunc           func(name string) (api.PodInfo, error)
-	containerStatsFunc func(podID, containerName string) (*api.ContainerStats, error)
+	containerStatsFunc func(podFullName, containerName string) (*api.ContainerStats, error)
 	machineStatsFunc   func() (*api.ContainerStats, error)
 }
 
@@ -42,8 +42,8 @@ func (fk *fakeKubelet) GetPodInfo(name string) (api.PodInfo, error) {
 	return fk.infoFunc(name)
 }
 
-func (fk *fakeKubelet) GetContainerStats(podID, containerName string) (*api.ContainerStats, error) {
-	return fk.containerStatsFunc(podID, containerName)
+func (fk *fakeKubelet) GetContainerStats(podFullName, containerName string) (*api.ContainerStats, error) {
+	return fk.containerStatsFunc(podFullName, containerName)
 }
 
 func (fk *fakeKubelet) GetMachineStats() (*api.ContainerStats, error) {
@@ -51,11 +51,11 @@ func (fk *fakeKubelet) GetMachineStats() (*api.ContainerStats, error) {
 }
 
 type channelReader struct {
-	list [][]api.ContainerManifest
+	list [][]Pod
 	wg   sync.WaitGroup
 }
 
-func startReading(channel <-chan manifestUpdate) *channelReader {
+func startReading(channel <-chan PodUpdate) *channelReader {
 	cr := &channelReader{}
 	cr.wg.Add(1)
 	go func() {
@@ -64,20 +64,20 @@ func startReading(channel <-chan manifestUpdate) *channelReader {
 			if !ok {
 				break
 			}
-			cr.list = append(cr.list, update.manifests)
+			cr.list = append(cr.list, update.Pods)
 		}
 		cr.wg.Done()
 	}()
 	return cr
 }
 
-func (cr *channelReader) GetList() [][]api.ContainerManifest {
+func (cr *channelReader) GetList() [][]Pod {
 	cr.wg.Wait()
 	return cr.list
 }
 
 type serverTestFramework struct {
-	updateChan      chan manifestUpdate
+	updateChan      chan PodUpdate
 	updateReader    *channelReader
 	serverUnderTest *KubeletServer
 	fakeKubelet     *fakeKubelet
@@ -86,13 +86,13 @@ type serverTestFramework struct {
 
 func makeServerTest() *serverTestFramework {
 	fw := &serverTestFramework{
-		updateChan: make(chan manifestUpdate),
+		updateChan: make(chan PodUpdate),
 	}
 	fw.updateReader = startReading(fw.updateChan)
 	fw.fakeKubelet = &fakeKubelet{}
 	fw.serverUnderTest = &KubeletServer{
-		Kubelet:       fw.fakeKubelet,
-		UpdateChannel: fw.updateChan,
+		host:    fw.fakeKubelet,
+		updates: fw.updateChan,
 	}
 	fw.testHTTPServer = httptest.NewServer(fw.serverUnderTest)
 	return fw
@@ -120,8 +120,9 @@ func TestContainer(t *testing.T) {
 	if len(received) != 1 {
 		t.Errorf("Expected 1 manifest, but got %v", len(received))
 	}
-	if !reflect.DeepEqual(expected, received[0]) {
-		t.Errorf("Expected %#v, but got %#v", expected, received[0])
+	expectedPods := []Pod{Pod{Name: "test_manifest", Manifest: expected[0]}}
+	if !reflect.DeepEqual(expectedPods, received[0]) {
+		t.Errorf("Expected %#v, but got %#v", expectedPods, received[0])
 	}
 }
 
@@ -142,8 +143,9 @@ func TestContainers(t *testing.T) {
 	if len(received) != 1 {
 		t.Errorf("Expected 1 update, but got %v", len(received))
 	}
-	if !reflect.DeepEqual(expected, received[0]) {
-		t.Errorf("Expected %#v, but got %#v", expected, received[0])
+	expectedPods := []Pod{Pod{Name: "test_manifest_1", Manifest: expected[0]}, Pod{Name: "test_manifest_2", Manifest: expected[1]}}
+	if !reflect.DeepEqual(expectedPods, received[0]) {
+		t.Errorf("Expected %#v, but got %#v", expectedPods, received[0])
 	}
 }
 
