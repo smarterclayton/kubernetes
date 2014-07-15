@@ -20,13 +20,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
-	"net"
-	"net/http"
-	"os"
-	"path"
-	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,9 +32,7 @@ import (
 	"github.com/coreos/go-etcd/etcd"
 	"github.com/fsouza/go-dockerclient"
 	"github.com/golang/glog"
-	"github.com/google/cadvisor/client"
 	"github.com/google/cadvisor/info"
-	"gopkg.in/v1/yaml"
 )
 
 const defaultChanSize = 1024
@@ -64,87 +55,34 @@ func New() *Kubelet {
 
 // Kubelet is the main kubelet implementation.
 type Kubelet struct {
-	Hostname           string
-	EtcdClient         tools.EtcdClient
-	DockerClient       DockerInterface
-	DockerPuller       DockerPuller
-	CadvisorClient     CadvisorInterface
-	FileCheckFrequency time.Duration
-	SyncFrequency      time.Duration
-	HTTPCheckFrequency time.Duration
-	pullLock           sync.Mutex
-	HealthChecker      health.HealthChecker
+	Hostname     string
+	DockerClient DockerInterface
+
+	// Optional, no events will be sent without it
+	EtcdClient tools.EtcdClient
+	// Optional, no statistics will be available if omitted
+	CadvisorClient CadvisorInterface
+	// Optional, defaults to simple implementaiton
+	HealthChecker health.HealthChecker
+	// Optional, defaults to simple Docker implementation
+	DockerPuller DockerPuller
 }
 
-type manifestUpdate struct {
-	source    string
-	manifests []api.ContainerManifest
-}
-
-const (
-	fileSource       = "file"
-	etcdSource       = "etcd"
-	httpClientSource = "http_client"
-	httpServerSource = "http_server"
-)
-
-// RunKubelet starts background goroutines. If config_path, manifest_url, or address are empty,
-// they are not watched. Never returns.
-func (kl *Kubelet) RunKubelet(dockerEndpoint, configPath, manifestURL, etcdServers, address string, port uint) {
-	if kl.CadvisorClient == nil {
-		var err error
-		kl.CadvisorClient, err = cadvisor.NewClient("http://127.0.0.1:5000")
-		if err != nil {
-			glog.Errorf("Error on creating cadvisor client: %v", err)
-		}
-	}
+// Run starts the kubelet reacting to config updates
+func (kl *Kubelet) Run(updates <-chan PodUpdate, maxWait time.Duration) {
 	if kl.DockerPuller == nil {
 		kl.DockerPuller = NewDockerPuller(kl.DockerClient)
 	}
-	updateChannel := make(chan manifestUpdate)
-	if configPath != "" {
-		glog.Infof("Watching for file configs at %s", configPath)
-		go util.Forever(func() {
-			kl.WatchFiles(configPath, updateChannel)
-		}, kl.FileCheckFrequency)
+	if kl.HealthChecker == nil {
+		kl.HealthChecker = health.NewHealthChecker()
 	}
-	if manifestURL != "" {
-		glog.Infof("Watching for HTTP configs at %s", manifestURL)
-		go util.Forever(func() {
-			if err := kl.extractFromHTTP(manifestURL, updateChannel); err != nil {
-				glog.Errorf("Error syncing http: %v", err)
-			}
-		}, kl.HTTPCheckFrequency)
-	}
-	if etcdServers != "" {
-		servers := []string{etcdServers}
-		glog.Infof("Watching for etcd configs at %v", servers)
-		kl.EtcdClient = etcd.NewClient(servers)
-		go util.Forever(func() { kl.SyncAndSetupEtcdWatch(updateChannel) }, 20*time.Second)
-	}
-	if address != "" {
-		glog.Infof("Starting to listen on %s:%d", address, port)
-		handler := Server{
-			Kubelet:         kl,
-			UpdateChannel:   updateChannel,
-			DelegateHandler: http.DefaultServeMux,
-		}
-		s := &http.Server{
-			Addr:           net.JoinHostPort(address, strconv.FormatUint(uint64(port), 10)),
-			Handler:        &handler,
-			ReadTimeout:    10 * time.Second,
-			WriteTimeout:   10 * time.Second,
-			MaxHeaderBytes: 1 << 20,
-		}
-		go util.Forever(func() { s.ListenAndServe() }, 0)
-	}
-	kl.HealthChecker = health.MakeHealthChecker()
-	kl.syncLoop(updateChannel, kl)
+
+	go util.Forever(func() { kl.syncLoop(updates, kl, maxWait) }, 0)
 }
 
 // SyncHandler is an interface implemented by Kubelet, for testability
 type SyncHandler interface {
-	SyncManifests([]api.ContainerManifest) error
+	SyncPods([]Pod) error
 }
 
 // LogEvent logs an event to the etcd backend.
@@ -178,7 +116,7 @@ func makeEnvironmentVariables(container *api.Container) []string {
 	return result
 }
 
-func makeVolumesAndBinds(manifestID string, container *api.Container) (map[string]struct{}, []string) {
+func makeVolumesAndBinds(pod *Pod, container *api.Container) (map[string]struct{}, []string) {
 	volumes := map[string]struct{}{}
 	binds := []string{}
 	for _, volume := range container.VolumeMounts {
@@ -188,7 +126,7 @@ func makeVolumesAndBinds(manifestID string, container *api.Container) (map[strin
 			basePath = fmt.Sprintf("%s:%s", volume.MountPath, volume.MountPath)
 		} else {
 			volumes[volume.MountPath] = struct{}{}
-			basePath = fmt.Sprintf("/exports/%s/%s:%s", manifestID, volume.Name, volume.MountPath)
+			basePath = fmt.Sprintf("/exports/%s/%s:%s", GetPodFullName(pod), volume.Name, volume.MountPath)
 		}
 		if volume.ReadOnly {
 			basePath += ":ro"
@@ -237,14 +175,14 @@ func milliCPUToShares(milliCPU int) int {
 	return shares
 }
 
-// Run a single container from a manifest. Returns the docker container ID
-func (kl *Kubelet) runContainer(manifest *api.ContainerManifest, container *api.Container, netMode string) (id DockerID, err error) {
+// Run a single container from a pod. Returns the docker container ID
+func (kl *Kubelet) runContainer(pod *Pod, container *api.Container, netMode string) (id DockerID, err error) {
 	envVariables := makeEnvironmentVariables(container)
-	volumes, binds := makeVolumesAndBinds(manifest.ID, container)
+	volumes, binds := makeVolumesAndBinds(pod, container)
 	exposedPorts, portBindings := makePortsAndBindings(container)
 
 	opts := docker.CreateContainerOptions{
-		Name: buildDockerName(manifest, container),
+		Name: buildDockerName(pod, container),
 		Config: &docker.Config{
 			Cmd:          container.Command,
 			Env:          envVariables,
@@ -270,13 +208,14 @@ func (kl *Kubelet) runContainer(manifest *api.ContainerManifest, container *api.
 }
 
 // Kill a docker container
-func (kl *Kubelet) killContainer(container docker.APIContainers) error {
-	err := kl.DockerClient.StopContainer(container.ID, 10)
-	manifestID, containerName := parseDockerName(container.Names[0])
+func (kl *Kubelet) killContainer(dockerContainer docker.APIContainers) error {
+	err := kl.DockerClient.StopContainer(dockerContainer.ID, 10)
+	podFullName, containerName := parseDockerName(dockerContainer.Names[0])
 	kl.LogEvent(&api.Event{
 		Event: "STOP",
 		Manifest: &api.ContainerManifest{
-			ID: manifestID,
+			//TODO: This should be reported using either the apiserver schema or the kubelet schema
+			ID: podFullName,
 		},
 		Container: &api.Container{
 			Name: containerName,
@@ -286,251 +225,14 @@ func (kl *Kubelet) killContainer(container docker.APIContainers) error {
 	return err
 }
 
-func (kl *Kubelet) extractFromFile(name string) (api.ContainerManifest, error) {
-	var file *os.File
-	var err error
-	var manifest api.ContainerManifest
-
-	if file, err = os.Open(name); err != nil {
-		return manifest, err
-	}
-	defer file.Close()
-
-	data, err := ioutil.ReadAll(file)
-	if err != nil {
-		glog.Errorf("Couldn't read from file: %v", err)
-		return manifest, err
-	}
-	if err = kl.ExtractYAMLData(data, &manifest); err != nil {
-		return manifest, err
-	}
-	return manifest, nil
-}
-
-func (kl *Kubelet) extractFromDir(name string) ([]api.ContainerManifest, error) {
-	var manifests []api.ContainerManifest
-
-	files, err := filepath.Glob(filepath.Join(name, "[^.]*"))
-	if err != nil {
-		return manifests, err
-	}
-
-	sort.Strings(files)
-
-	for _, file := range files {
-		manifest, err := kl.extractFromFile(file)
-		if err != nil {
-			glog.Errorf("Couldn't read from file %s: %v", file, err)
-			return manifests, err
-		}
-		manifests = append(manifests, manifest)
-	}
-	return manifests, nil
-}
-
-// WatchFiles watches a file or direcory of files for changes to the set of pods that
-// should run on this Kubelet.
-func (kl *Kubelet) WatchFiles(configPath string, updateChannel chan<- manifestUpdate) {
-	var err error
-
-	statInfo, err := os.Stat(configPath)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			glog.Errorf("Error accessing path: %v", err)
-		}
-		return
-	}
-	if statInfo.Mode().IsDir() {
-		manifests, err := kl.extractFromDir(configPath)
-		if err != nil {
-			glog.Errorf("Error polling dir: %v", err)
-			return
-		}
-		updateChannel <- manifestUpdate{fileSource, manifests}
-	} else if statInfo.Mode().IsRegular() {
-		manifest, err := kl.extractFromFile(configPath)
-		if err != nil {
-			glog.Errorf("Error polling file: %v", err)
-			return
-		}
-		updateChannel <- manifestUpdate{fileSource, []api.ContainerManifest{manifest}}
-	} else {
-		glog.Errorf("Error accessing config - not a directory or file")
-		return
-	}
-}
-
-func (kl *Kubelet) extractFromHTTP(url string, updateChannel chan<- manifestUpdate) error {
-	request, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return err
-	}
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		return err
-	}
-	defer response.Body.Close()
-	data, err := ioutil.ReadAll(response.Body)
-	if err != nil {
-		return err
-	}
-	if len(data) == 0 {
-		return fmt.Errorf("zero-length data received from %v", url)
-	}
-
-	// First try as if it's a single manifest
-	var manifest api.ContainerManifest
-	singleErr := yaml.Unmarshal(data, &manifest)
-	if singleErr == nil && manifest.Version == "" {
-		// If data is a []ContainerManifest, trying to put it into a ContainerManifest
-		// will not give an error but also won't set any of the fields.
-		// Our docs say that the version field is mandatory, so using that to judge wether
-		// this was actually successful.
-		singleErr = fmt.Errorf("got blank version field")
-	}
-	if singleErr == nil {
-		updateChannel <- manifestUpdate{httpClientSource, []api.ContainerManifest{manifest}}
-		return nil
-	}
-
-	// That didn't work, so try an array of manifests.
-	var manifests []api.ContainerManifest
-	multiErr := yaml.Unmarshal(data, &manifests)
-	// We're not sure if the person reading the logs is going to care about the single or
-	// multiple manifest unmarshalling attempt, so we need to put both in the logs, as is
-	// done at the end. Hence not returning early here.
-	if multiErr == nil && len(manifests) > 0 && manifests[0].Version == "" {
-		multiErr = fmt.Errorf("got blank version field")
-	}
-	if multiErr == nil {
-		updateChannel <- manifestUpdate{httpClientSource, manifests}
-		return nil
-	}
-	return fmt.Errorf("%v: received '%v', but couldn't parse as a "+
-		"single manifest (%v: %+v) or as multiple manifests (%v: %+v).\n",
-		url, string(data), singleErr, manifest, multiErr, manifests)
-}
-
-// ResponseToManifests takes an etcd Response object, and turns it into a structured list of containers.
-// It returns a list of containers, or an error if one occurs.
-func (kl *Kubelet) ResponseToManifests(response *etcd.Response) ([]api.ContainerManifest, error) {
-	if response.Node == nil || len(response.Node.Value) == 0 {
-		return nil, fmt.Errorf("no nodes field: %v", response)
-	}
-	var manifests []api.ContainerManifest
-	err := kl.ExtractYAMLData([]byte(response.Node.Value), &manifests)
-	return manifests, err
-}
-
-func (kl *Kubelet) getKubeletStateFromEtcd(key string, updateChannel chan<- manifestUpdate) error {
-	response, err := kl.EtcdClient.Get(key, true, false)
-	if err != nil {
-		if tools.IsEtcdNotFound(err) {
-			return nil
-		}
-		glog.Errorf("Error on etcd get of %s: %v", key, err)
-		return err
-	}
-	manifests, err := kl.ResponseToManifests(response)
-	if err != nil {
-		glog.Errorf("Error parsing response (%v): %s", response, err)
-		return err
-	}
-	glog.Infof("Got state from etcd: %+v", manifests)
-	updateChannel <- manifestUpdate{etcdSource, manifests}
-	return nil
-}
-
-// SyncAndSetupEtcdWatch synchronizes with etcd, and sets up an etcd watch for new configurations.
-// The channel to send new configurations across
-// This function loops forever and is intended to be run in a go routine.
-func (kl *Kubelet) SyncAndSetupEtcdWatch(updateChannel chan<- manifestUpdate) {
-	key := path.Join("registry", "hosts", strings.TrimSpace(kl.Hostname), "kubelet")
-
-	// First fetch the initial configuration (watch only gives changes...)
-	for {
-		err := kl.getKubeletStateFromEtcd(key, updateChannel)
-		if err == nil {
-			// We got a successful response, etcd is up, set up the watch.
-			break
-		}
-		time.Sleep(30 * time.Second)
-	}
-
-	done := make(chan bool)
-	go util.Forever(func() { kl.TimeoutWatch(done) }, 0)
-	for {
-		// The etcd client will close the watch channel when it exits.  So we need
-		// to create and service a new one every time.
-		watchChannel := make(chan *etcd.Response)
-		// We don't push this through Forever because if it dies, we just do it again in 30 secs.
-		// anyway.
-		go kl.WatchEtcd(watchChannel, updateChannel)
-
-		kl.getKubeletStateFromEtcd(key, updateChannel)
-		glog.V(1).Infof("Setting up a watch for configuration changes in etcd for %s", key)
-		kl.EtcdClient.Watch(key, 0, true, watchChannel, done)
-	}
-}
-
-// TimeoutWatch timeout the watch after 30 seconds.
-func (kl *Kubelet) TimeoutWatch(done chan bool) {
-	t := time.Tick(30 * time.Second)
-	for _ = range t {
-		done <- true
-	}
-}
-
-// ExtractYAMLData extracts data from YAML file into a list of containers.
-func (kl *Kubelet) ExtractYAMLData(buf []byte, output interface{}) error {
-	err := yaml.Unmarshal(buf, output)
-	if err != nil {
-		glog.Errorf("Couldn't unmarshal configuration: %v", err)
-		return err
-	}
-	return nil
-}
-
-func (kl *Kubelet) extractFromEtcd(response *etcd.Response) ([]api.ContainerManifest, error) {
-	var manifests []api.ContainerManifest
-	if response.Node == nil || len(response.Node.Value) == 0 {
-		return manifests, fmt.Errorf("no nodes field: %v", response)
-	}
-	err := kl.ExtractYAMLData([]byte(response.Node.Value), &manifests)
-	return manifests, err
-}
-
-// WatchEtcd watches etcd for changes, receives config objects from the etcd client watch.
-// This function loops until the watchChannel is closed, and is intended to be run as a goroutine.
-func (kl *Kubelet) WatchEtcd(watchChannel <-chan *etcd.Response, updateChannel chan<- manifestUpdate) {
-	defer util.HandleCrash()
-	for {
-		watchResponse := <-watchChannel
-		// This means the channel has been closed.
-		if watchResponse == nil {
-			return
-		}
-		glog.Infof("Got etcd change: %v", watchResponse)
-		manifests, err := kl.extractFromEtcd(watchResponse)
-		if err != nil {
-			glog.Errorf("Error handling response from etcd: %v", err)
-			continue
-		}
-		glog.Infof("manifests: %+v", manifests)
-		// Ok, we have a valid configuration, send to channel for
-		// rejiggering.
-		updateChannel <- manifestUpdate{etcdSource, manifests}
-	}
-}
-
 const networkContainerName = "net"
 
-// Create a network container for a manifest. Returns the docker container ID of the newly created container.
-func (kl *Kubelet) createNetworkContainer(manifest *api.ContainerManifest) (DockerID, error) {
+// createNetworkContainer starts the network container for a pod. Returns the docker container ID of the newly created container.
+func (kl *Kubelet) createNetworkContainer(pod *Pod) (DockerID, error) {
 	var ports []api.Port
 	// Docker only exports ports from the network container.  Let's
 	// collect all of the relevant ports and export them.
-	for _, container := range manifest.Containers {
+	for _, container := range pod.Manifest.Containers {
 		ports = append(ports, container.Ports...)
 	}
 	container := &api.Container{
@@ -540,29 +242,31 @@ func (kl *Kubelet) createNetworkContainer(manifest *api.ContainerManifest) (Dock
 		Ports:   ports,
 	}
 	kl.DockerPuller.Pull("busybox")
-	return kl.runContainer(manifest, container, "")
+	return kl.runContainer(pod, container, "")
 }
 
-func (kl *Kubelet) syncManifest(manifest *api.ContainerManifest, dockerContainers DockerContainers, keepChannel chan<- DockerID) error {
-	// Make sure we have a network container
+func (kl *Kubelet) syncPod(pod *Pod, dockerContainers DockerContainers, keepChannel chan<- DockerID) error {
+	podFullName := GetPodFullName(pod)
+
 	var netID DockerID
-	if networkDockerContainer, found := dockerContainers.FindPodContainer(manifest.ID, networkContainerName); found {
+	if networkDockerContainer, found := dockerContainers.FindPodContainer(podFullName, networkContainerName); found {
 		netID = DockerID(networkDockerContainer.ID)
 	} else {
-		dockerNetworkID, err := kl.createNetworkContainer(manifest)
+		glog.Infof("Network container doesn't exist, creating")
+		dockerNetworkID, err := kl.createNetworkContainer(pod)
 		if err != nil {
-			glog.Errorf("Failed to introspect network container. (%v)  Skipping manifest %s", err, manifest.ID)
+			glog.Errorf("Failed to introspect network container. (%v)  Skipping pod %s", err, podFullName)
 			return err
 		}
 		netID = dockerNetworkID
 	}
 	keepChannel <- netID
 
-	for _, container := range manifest.Containers {
-		if dockerContainer, found := dockerContainers.FindPodContainer(manifest.ID, container.Name); found {
+	for _, container := range pod.Manifest.Containers {
+		if dockerContainer, found := dockerContainers.FindPodContainer(podFullName, container.Name); found {
 			containerID := DockerID(dockerContainer.ID)
-			glog.Infof("manifest %s container %s exists as %v", manifest.ID, container.Name, containerID)
-			glog.V(1).Infof("manifest %s container %s exists as %v", manifest.ID, container.Name, containerID)
+			glog.Infof("pod %s container %s exists as %v", podFullName, container.Name, containerID)
+			glog.V(1).Infof("pod %s container %s exists as %v", podFullName, container.Name, containerID)
 
 			// TODO: This should probably be separated out into a separate goroutine.
 			healthy, err := kl.healthy(container, dockerContainer)
@@ -575,22 +279,22 @@ func (kl *Kubelet) syncManifest(manifest *api.ContainerManifest, dockerContainer
 				continue
 			}
 
-			glog.V(1).Infof("manifest %s container %s is unhealthy %d.", manifest.ID, container.Name, healthy)
+			glog.V(1).Infof("pod %s container %s is unhealthy.", podFullName, container.Name, healthy)
 			if err := kl.killContainer(*dockerContainer); err != nil {
-				glog.V(1).Infof("Failed to kill container %s: %v", containerID, err)
+				glog.V(1).Infof("Failed to kill container %s: %v", dockerContainer.ID, err)
 				continue
 			}
 		}
 
 		glog.Infof("%+v doesn't exist, creating", container)
 		if err := kl.DockerPuller.Pull(container.Image); err != nil {
-			glog.Errorf("Failed to create container: %v skipping manifest %s container %s.", err, manifest.ID, container.Name)
+			glog.Errorf("Failed to pull image: %v skipping pod %s container %s.", err, podFullName, container.Name)
 			continue
 		}
-		containerID, err := kl.runContainer(manifest, &container, "container:"+string(netID))
+		containerID, err := kl.runContainer(pod, &container, "container:"+string(netID))
 		if err != nil {
 			// TODO(bburns) : Perhaps blacklist a container after N failures?
-			glog.Errorf("Error running manifest %s container %s: %v", manifest.ID, container.Name, err)
+			glog.Errorf("Error running pod %s container %s: %v", podFullName, container.Name, err)
 			continue
 		}
 		keepChannel <- containerID
@@ -600,9 +304,10 @@ func (kl *Kubelet) syncManifest(manifest *api.ContainerManifest, dockerContainer
 
 type empty struct{}
 
-// SyncManifests synchronizes the configured list of containers (desired state) with the host current state.
-func (kl *Kubelet) SyncManifests(config []api.ContainerManifest) error {
-	glog.Infof("Desired: %+v", config)
+// SyncPods synchronizes the configured list of pods (desired state) with the host current state.
+func (kl *Kubelet) SyncPods(pods []Pod) error {
+	glog.Infof("Desired: %+v", pods)
+	var err error
 	dockerIdsToKeep := map[DockerID]empty{}
 	keepChannel := make(chan DockerID, defaultChanSize)
 	waitGroup := sync.WaitGroup{}
@@ -614,18 +319,18 @@ func (kl *Kubelet) SyncManifests(config []api.ContainerManifest) error {
 	}
 
 	// Check for any containers that need starting
-	for ix := range config {
+	for i := range pods {
 		waitGroup.Add(1)
 		go func(index int) {
 			defer util.HandleCrash()
 			defer waitGroup.Done()
 			// necessary to dereference by index here b/c otherwise the shared value
 			// in the for each is re-used.
-			err := kl.syncManifest(&config[index], dockerContainers, keepChannel)
+			err := kl.syncPod(&pods[index], dockerContainers, keepChannel)
 			if err != nil {
-				glog.Errorf("Error syncing manifest: %v skipping.", err)
+				glog.Errorf("Error syncing pod: %v skipping.", err)
 			}
-		}(ix)
+		}(i)
 	}
 	ch := make(chan bool)
 	go func() {
@@ -634,7 +339,7 @@ func (kl *Kubelet) SyncManifests(config []api.ContainerManifest) error {
 		}
 		ch <- true
 	}()
-	if len(config) > 0 {
+	if len(pods) > 0 {
 		waitGroup.Wait()
 	}
 	close(keepChannel)
@@ -683,20 +388,25 @@ func checkHostPortConflicts(allManifests []api.ContainerManifest, newManifest *a
 // no changes are seen to the configuration, will synchronize the last known desired
 // state every sync_frequency seconds.
 // Never returns.
-func (kl *Kubelet) syncLoop(updateChannel <-chan manifestUpdate, handler SyncHandler) {
-	last := make(map[string][]api.ContainerManifest)
+func (kl *Kubelet) syncLoop(updates <-chan PodUpdate, handler SyncHandler, maxWait time.Duration) {
+	var last []Pod
 	for {
 		select {
-		case u := <-updateChannel:
-			glog.Infof("Got configuration from %s: %+v", u.source, u.manifests)
-			last[u.source] = u.manifests
-		case <-time.After(kl.SyncFrequency):
+		case u := <-updates:
+			switch u.Op {
+			case SET:
+				glog.Infof("Got configuration: %+v", u.Pods)
+				last = u.Pods
+			default:
+				panic("syncLoop does not support incremental changes")
+			}
+		case <-time.After(maxWait):
 		}
 
-		allManifests := []api.ContainerManifest{}
-		allIds := util.StringSet{}
-		for src, srcManifests := range last {
-			for i := range srcManifests {
+		// TODO: move to PodConfig
+		/*
+			allIds := util.StringSet{}
+			for i := range last {
 				allErrs := []error{}
 
 				m := &srcManifests[i]
@@ -715,12 +425,9 @@ func (kl *Kubelet) syncLoop(updateChannel <-chan manifestUpdate, handler SyncHan
 				if len(allErrs) > 0 {
 					glog.Warningf("Manifest from %s failed validation, ignoring: %v", src, allErrs)
 				}
-			}
-			// TODO(thockin): There's no reason to collect manifests by value.  Don't pessimize.
-			allManifests = append(allManifests, srcManifests...)
-		}
+			}*/
 
-		err := handler.SyncManifests(allManifests)
+		err := handler.SyncPods(last)
 		if err != nil {
 			glog.Errorf("Couldn't sync containers : %v", err)
 		}
@@ -749,12 +456,12 @@ func (kl *Kubelet) statsFromContainerPath(containerPath string, req *info.Contai
 }
 
 // GetPodInfo returns information from Docker about the containers in a pod
-func (kl *Kubelet) GetPodInfo(manifestID string) (api.PodInfo, error) {
-	return getDockerPodInfo(kl.DockerClient, manifestID)
+func (kl *Kubelet) GetPodInfo(podFullName string) (api.PodInfo, error) {
+	return getDockerPodInfo(kl.DockerClient, podFullName)
 }
 
 // GetContainerInfo returns stats (from Cadvisor) for a container.
-func (kl *Kubelet) GetContainerInfo(manifestID, containerName string, req *info.ContainerInfoRequest) (*info.ContainerInfo, error) {
+func (kl *Kubelet) GetContainerInfo(podFullName, containerName string, req *info.ContainerInfoRequest) (*info.ContainerInfo, error) {
 	if kl.CadvisorClient == nil {
 		return nil, nil
 	}
@@ -762,7 +469,7 @@ func (kl *Kubelet) GetContainerInfo(manifestID, containerName string, req *info.
 	if err != nil {
 		return nil, err
 	}
-	dockerContainer, found := dockerContainers.FindPodContainer(manifestID, containerName)
+	dockerContainer, found := dockerContainers.FindPodContainer(podFullName, containerName)
 	if !found {
 		return nil, errors.New("couldn't find container")
 	}

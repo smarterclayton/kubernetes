@@ -34,7 +34,7 @@ import (
 
 type fakeKubelet struct {
 	infoFunc           func(name string) (api.PodInfo, error)
-	containerStatsFunc func(podID, containerName string, req *info.ContainerInfoRequest) (*info.ContainerInfo, error)
+	containerStatsFunc func(podFullName, containerName string, req *info.ContainerInfoRequest) (*info.ContainerInfo, error)
 	machineStatsFunc   func(query *info.ContainerInfoRequest) (*info.ContainerInfo, error)
 }
 
@@ -42,8 +42,8 @@ func (fk *fakeKubelet) GetPodInfo(name string) (api.PodInfo, error) {
 	return fk.infoFunc(name)
 }
 
-func (fk *fakeKubelet) GetContainerInfo(podID, containerName string, req *info.ContainerInfoRequest) (*info.ContainerInfo, error) {
-	return fk.containerStatsFunc(podID, containerName, req)
+func (fk *fakeKubelet) GetContainerInfo(podFullName, containerName string, req *info.ContainerInfoRequest) (*info.ContainerInfo, error) {
+	return fk.containerStatsFunc(podFullName, containerName, req)
 }
 
 func (fk *fakeKubelet) GetMachineStats(req *info.ContainerInfoRequest) (*info.ContainerInfo, error) {
@@ -51,7 +51,7 @@ func (fk *fakeKubelet) GetMachineStats(req *info.ContainerInfoRequest) (*info.Co
 }
 
 type serverTestFramework struct {
-	updateChan      chan manifestUpdate
+	updateChan      chan interface{}
 	updateReader    *channelReader
 	serverUnderTest *Server
 	fakeKubelet     *fakeKubelet
@@ -60,13 +60,13 @@ type serverTestFramework struct {
 
 func makeServerTest() *serverTestFramework {
 	fw := &serverTestFramework{
-		updateChan: make(chan manifestUpdate),
+		updateChan: make(chan interface{}),
 	}
 	fw.updateReader = startReading(fw.updateChan)
 	fw.fakeKubelet = &fakeKubelet{}
 	fw.serverUnderTest = &Server{
-		Kubelet:       fw.fakeKubelet,
-		UpdateChannel: fw.updateChan,
+		host:    fw.fakeKubelet,
+		updates: fw.updateChan,
 	}
 	fw.testHTTPServer = httptest.NewServer(fw.serverUnderTest)
 	return fw
@@ -94,8 +94,9 @@ func TestContainer(t *testing.T) {
 	if len(received) != 1 {
 		t.Errorf("Expected 1 manifest, but got %v", len(received))
 	}
-	if !reflect.DeepEqual(expected, received[0]) {
-		t.Errorf("Expected %#v, but got %#v", expected, received[0])
+	expectedPods := []Pod{Pod{Name: "test_manifest", Manifest: expected[0]}}
+	if !reflect.DeepEqual(expectedPods, received[0]) {
+		t.Errorf("Expected %#v, but got %#v", expectedPods, received[0])
 	}
 }
 
@@ -116,8 +117,9 @@ func TestContainers(t *testing.T) {
 	if len(received) != 1 {
 		t.Errorf("Expected 1 update, but got %v", len(received))
 	}
-	if !reflect.DeepEqual(expected, received[0]) {
-		t.Errorf("Expected %#v, but got %#v", expected, received[0])
+	expectedPods := []Pod{Pod{Name: "test_manifest_1", Manifest: expected[0]}, Pod{Name: "test_manifest_2", Manifest: expected[1]}}
+	if !reflect.DeepEqual(expectedPods, received[0]) {
+		t.Errorf("Expected %#v, but got %#v", expectedPods, received[0])
 	}
 }
 

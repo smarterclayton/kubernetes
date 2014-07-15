@@ -32,6 +32,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/controller"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/config"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/master"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
@@ -84,27 +85,26 @@ func startComponents(manifestURL string) (apiServerURL string) {
 	controllerManager.Run(1 * time.Second)
 
 	// Kubelet
-	myKubelet := kubelet.Kubelet{
-		Hostname:           machineList[0],
-		DockerClient:       &fakeDocker1,
-		DockerPuller:       &kubelet.FakeDockerPuller{},
-		FileCheckFrequency: 5 * time.Second,
-		SyncFrequency:      5 * time.Second,
-		HTTPCheckFrequency: 5 * time.Second,
+	cfg1 := config.NewPodConfig(false)
+	config.NewConfigSourceURL(manifestURL, 5*time.Second, cfg1.Channel("url"))
+	myKubelet := &kubelet.Kubelet{
+		Hostname:     machineList[0],
+		DockerClient: &fakeDocker1,
+		DockerPuller: &kubelet.FakeDockerPuller{},
 	}
-	go myKubelet.RunKubelet("", "", manifestURL, servers[0], "localhost", 10250)
+	myKubelet.Run(cfg1.Updates(), 5*time.Second)
+	kubelet.ListenAndServeKubeletServer(myKubelet, cfg1.Channel("http"), http.DefaultServeMux, "localhost", 10250)
 
 	// Create a second kubelet so that the guestbook example's two redis slaves both
 	// have a place they can schedule.
-	otherKubelet := kubelet.Kubelet{
-		Hostname:           machineList[1],
-		DockerClient:       &fakeDocker2,
-		DockerPuller:       &kubelet.FakeDockerPuller{},
-		FileCheckFrequency: 5 * time.Second,
-		SyncFrequency:      5 * time.Second,
-		HTTPCheckFrequency: 5 * time.Second,
+	cfg2 := config.NewPodConfig(false)
+	otherKubelet := &kubelet.Kubelet{
+		Hostname:     machineList[1],
+		DockerClient: &fakeDocker2,
+		DockerPuller: &kubelet.FakeDockerPuller{},
 	}
-	go otherKubelet.RunKubelet("", "", "", servers[0], "localhost", 10251)
+	otherKubelet.Run(cfg2.Updates(), 5*time.Second)
+	kubelet.ListenAndServeKubeletServer(otherKubelet, cfg2.Channel("http"), http.DefaultServeMux, "localhost", 10251)
 
 	return apiserver.URL
 }

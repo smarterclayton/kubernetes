@@ -20,7 +20,9 @@ import (
 	"reflect"
 	"sync"
 
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util/config"
 	"github.com/golang/glog"
 )
@@ -81,7 +83,7 @@ type podStorage struct {
 	podLock sync.RWMutex
 	// map of source name to pod name to pod reference
 	pods map[string]map[string]*kubelet.Pod
-	// whether incremental updates should be delivered
+	// whether ADD/REMOVE/UPDATE are delivered, or just SET/UPDATE
 	incremental bool
 
 	// ensures that updates are delivered in strict order
@@ -122,12 +124,14 @@ func (s *podStorage) Merge(source string, change interface{}) error {
 		} else {
 			glog.Infof("Updating pods from source %s : %v", source, update.Pods)
 		}
-		for _, value := range update.Pods {
-			name := value.Name
+
+		filtered := filterInvalidPods(update.Pods, source)
+		for _, ref := range filtered {
+			name := ref.Name
 			if existing, found := pods[name]; found {
-				if !reflect.DeepEqual(existing.Manifest, value.Manifest) {
+				if !reflect.DeepEqual(existing.Manifest, ref.Manifest) {
 					// this is an update
-					existing.Manifest = value.Manifest
+					existing.Manifest = ref.Manifest
 					updates.Pods = append(updates.Pods, *existing)
 					continue
 				}
@@ -135,10 +139,9 @@ func (s *podStorage) Merge(source string, change interface{}) error {
 				continue
 			}
 			// this is an add
-			add := value
-			add.Namespace = source
-			pods[name] = &add
-			adds.Pods = append(adds.Pods, add)
+			ref.Namespace = source
+			pods[name] = ref
+			adds.Pods = append(adds.Pods, *ref)
 		}
 
 	case kubelet.REMOVE:
@@ -159,27 +162,24 @@ func (s *podStorage) Merge(source string, change interface{}) error {
 		// Clear the old map entries by just creating a new map
 		oldPods := pods
 		pods = make(map[string]*kubelet.Pod)
-		for _, value := range update.Pods {
-			name := value.Name
-			if _, found := pods[name]; found {
-				glog.Infof("Received duplicate pod from source %s with name %s", source, name)
-			}
 
+		filtered := filterInvalidPods(update.Pods, source)
+		for _, ref := range filtered {
+			name := ref.Name
 			if existing, found := oldPods[name]; found {
 				pods[name] = existing
-				if !reflect.DeepEqual(existing.Manifest, value.Manifest) {
+				if !reflect.DeepEqual(existing.Manifest, ref.Manifest) {
 					// this is an update
-					existing.Manifest = value.Manifest
+					existing.Manifest = ref.Manifest
 					updates.Pods = append(updates.Pods, *existing)
 					continue
 				}
 				// this is a no-op
 				continue
 			}
-			add := value
-			add.Namespace = source
-			pods[name] = &add
-			adds.Pods = append(adds.Pods, add)
+			ref.Namespace = source
+			pods[name] = ref
+			adds.Pods = append(adds.Pods, *ref)
 		}
 
 		for name, existing := range oldPods {
@@ -190,12 +190,13 @@ func (s *podStorage) Merge(source string, change interface{}) error {
 		}
 
 	default:
-		glog.Infof("Received invalname update type: %v", update)
+		glog.Infof("Received invalid update type: %v", update)
 
 	}
 	s.pods[source] = pods
 	s.podLock.Unlock()
 
+	// deliver update notifications
 	if s.incremental {
 		if len(deletes.Pods) > 0 {
 			s.updates <- deletes
@@ -207,7 +208,11 @@ func (s *podStorage) Merge(source string, change interface{}) error {
 			s.updates <- updates
 		}
 	} else if len(deletes.Pods) > 0 || len(adds.Pods) > 0 || len(updates.Pods) > 0 {
-		s.updates <- kubelet.PodUpdate{s.MergedState().([]kubelet.Pod), kubelet.SET}
+		if len(updates.Pods) > 0 {
+			s.updates <- updates
+		} else {
+			s.updates <- kubelet.PodUpdate{s.MergedState().([]kubelet.Pod), kubelet.SET}
+		}
 	}
 
 	s.updateLock.Unlock()
@@ -215,16 +220,38 @@ func (s *podStorage) Merge(source string, change interface{}) error {
 	return nil
 }
 
+func filterInvalidPods(pods []kubelet.Pod, source string) (filtered []*kubelet.Pod) {
+	names := util.StringSet{}
+	errors := []error{}
+	for i := range pods {
+		if names.Has(pods[i].Name) {
+			errors = append(errors, api.ValidationError{api.ErrTypeDuplicate, "Pod.Name", pods[i].Name})
+		} else {
+			names.Insert(pods[i].Name)
+		}
+		if errs := api.ValidateManifest(&pods[i].Manifest); len(errs) != 0 {
+			errors = append(errors, errs...)
+		}
+		if len(errors) > 0 {
+			glog.Warningf("Pod %d from %s failed validation, ignoring: %v", i+1, source, errors)
+			continue
+		}
+		filtered = append(filtered, &pods[i])
+	}
+	return
+}
+
 // Sync sends a copy of the current state through the update channel
 func (s *podStorage) Sync() {
 	s.updateLock.Lock()
+	defer s.updateLock.Lock()
 	s.updates <- kubelet.PodUpdate{s.MergedState().([]kubelet.Pod), kubelet.SET}
-	s.updateLock.Unlock()
 }
 
 // Object implements config.Accessor
 func (s *podStorage) MergedState() interface{} {
 	s.podLock.RLock()
+	defer s.podLock.RUnlock()
 	pods := make([]kubelet.Pod, 0)
 	for source, sourcePods := range s.pods {
 		for _, podRef := range sourcePods {
@@ -233,6 +260,5 @@ func (s *podStorage) MergedState() interface{} {
 			pods = append(pods, pod)
 		}
 	}
-	s.podLock.RUnlock()
 	return pods
 }

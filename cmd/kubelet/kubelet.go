@@ -23,16 +23,21 @@ package main
 import (
 	"flag"
 	"math/rand"
+	"net/http"
 	"os"
 	"os/exec"
+	"path"
+	"strings"
 	"time"
 
 	_ "github.com/GoogleCloudPlatform/kubernetes/pkg/healthz"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
+	kconfig "github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/config"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/coreos/go-etcd/etcd"
 	"github.com/fsouza/go-dockerclient"
 	"github.com/golang/glog"
+	"github.com/google/cadvisor/client"
 )
 
 var (
@@ -71,22 +76,55 @@ func main() {
 		glog.Fatal("Couldn't connnect to docker.")
 	}
 
-	hostname := []byte(*hostnameOverride)
-	if string(hostname) == "" {
+	hostname := *hostnameOverride
+	if hostname == "" {
 		// Note: We use exec here instead of os.Hostname() because we
 		// want the FQDN, and this is the easiest way to get it.
-		hostname, err = exec.Command("hostname", "-f").Output()
+		output, err := exec.Command("hostname", "-f").Output()
 		if err != nil {
 			glog.Fatalf("Couldn't determine hostname: %v", err)
 		}
+		hostname = string(output)
+	}
+	hostname = strings.TrimSpace(hostname)
+
+	cadvisorClient, err := cadvisor.NewClient("http://127.0.0.1:5000")
+	if err != nil {
+		glog.Errorf("Error on creating cadvisor client: %v", err)
 	}
 
-	k := kubelet.Kubelet{
-		Hostname:           string(hostname),
-		DockerClient:       dockerClient,
-		FileCheckFrequency: *fileCheckFrequency,
-		SyncFrequency:      *syncFrequency,
-		HTTPCheckFrequency: *httpCheckFrequency,
+	k := &kubelet.Kubelet{
+		Hostname:       string(hostname),
+		DockerClient:   dockerClient,
+		CadvisorClient: cadvisorClient,
 	}
-	k.RunKubelet(*dockerEndpoint, *config, *manifestURL, *etcdServers, *address, *port)
+
+	// source of all configuration
+	cfg := kconfig.NewPodConfig(false)
+
+	// define file config source
+	if *config != "" {
+		kconfig.NewConfigSourceFile(*config, *fileCheckFrequency, cfg.Channel("file"))
+	}
+
+	// define etcd config source and initialize etcd client
+	if *etcdServers != "" {
+		servers := []string{*etcdServers}
+		glog.Infof("Watching for etcd configs at %v", servers)
+		k.EtcdClient = etcd.NewClient(servers)
+		kconfig.NewConfigSourceEtcd(
+			path.Join("registry", "hosts", hostname, "kubelet"),
+			k.EtcdClient,
+			30*time.Second,
+			cfg.Channel("etcd"),
+		)
+	}
+
+	// start the kubelet
+	k.Run(cfg.Updates(), *syncFrequency)
+
+	// start the kubelet server
+	if *address != "" {
+		kubelet.ListenAndServeKubeletServer(k, cfg.Channel("http"), http.DefaultServeMux, *address, *port)
+	}
 }
