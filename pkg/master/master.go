@@ -25,6 +25,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/image"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/coreos/go-etcd/etcd"
@@ -33,22 +34,26 @@ import (
 
 // Master contains state for a Kubernetes cluster master/api server.
 type Master struct {
-	podRegistry        registry.PodRegistry
-	controllerRegistry registry.ControllerRegistry
-	serviceRegistry    registry.ServiceRegistry
-	minionRegistry     registry.MinionRegistry
-	storage            map[string]apiserver.RESTStorage
-	client             *client.Client
+	podRegistry             registry.PodRegistry
+	controllerRegistry      registry.ControllerRegistry
+	serviceRegistry         registry.ServiceRegistry
+	minionRegistry          registry.MinionRegistry
+	imageRegistry           image.ImageRegistry
+	imageRepositoryRegistry image.ImageRepositoryRegistry
+	storage                 map[string]apiserver.RESTStorage
+	client                  *client.Client
 }
 
 // NewMemoryServer returns a new instance of Master backed with memory (not etcd).
 func NewMemoryServer(minions []string, podInfoGetter client.PodInfoGetter, cloud cloudprovider.Interface, client *client.Client) *Master {
 	m := &Master{
-		podRegistry:        registry.MakeMemoryRegistry(),
-		controllerRegistry: registry.MakeMemoryRegistry(),
-		serviceRegistry:    registry.MakeMemoryRegistry(),
-		minionRegistry:     registry.MakeMinionRegistry(minions),
-		client:             client,
+		podRegistry:             registry.MakeMemoryRegistry(),
+		controllerRegistry:      registry.MakeMemoryRegistry(),
+		serviceRegistry:         registry.MakeMemoryRegistry(),
+		minionRegistry:          registry.MakeMinionRegistry(minions),
+		imageRegistry:           image.MakeMemoryRegistry(),
+		imageRepositoryRegistry: image.MakeMemoryRegistry(),
+		client:                  client,
 	}
 	m.init(cloud, podInfoGetter)
 	return m
@@ -59,11 +64,13 @@ func New(etcdServers, minions []string, podInfoGetter client.PodInfoGetter, clou
 	etcdClient := etcd.NewClient(etcdServers)
 	minionRegistry := minionRegistryMaker(minions, cloud, minionRegexp, healthCheckMinions, cacheMinionsTTL)
 	m := &Master{
-		podRegistry:        registry.MakeEtcdRegistry(etcdClient, minionRegistry),
-		controllerRegistry: registry.MakeEtcdRegistry(etcdClient, minionRegistry),
-		serviceRegistry:    registry.MakeEtcdRegistry(etcdClient, minionRegistry),
-		minionRegistry:     minionRegistry,
-		client:             client,
+		podRegistry:             registry.MakeEtcdRegistry(etcdClient, minionRegistry),
+		controllerRegistry:      registry.MakeEtcdRegistry(etcdClient, minionRegistry),
+		serviceRegistry:         registry.MakeEtcdRegistry(etcdClient, minionRegistry),
+		minionRegistry:          minionRegistry,
+		imageRegistry:           image.MakeMemoryRegistry(),
+		imageRepositoryRegistry: image.MakeMemoryRegistry(),
+		client:                  client,
 	}
 	m.init(cloud, podInfoGetter)
 	return m
@@ -105,6 +112,9 @@ func (m *Master) init(cloud cloudprovider.Interface, podInfoGetter client.PodInf
 		"replicationControllers": registry.NewControllerRegistryStorage(m.controllerRegistry, m.podRegistry),
 		"services":               registry.MakeServiceRegistryStorage(m.serviceRegistry, cloud, m.minionRegistry),
 		"minions":                registry.MakeMinionRegistryStorage(m.minionRegistry),
+		"images":                 image.NewImageRegistryStorage(m.imageRegistry),
+		"imageRepositories":      image.NewImageRepositoryRegistryStorage(m.imageRepositoryRegistry, m.imageRegistry),
+		"imagesByRepository":     image.NewImagesByRepositoryRegistryStorage(m.imageRepositoryRegistry, m.imageRegistry),
 	}
 }
 

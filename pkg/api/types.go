@@ -234,6 +234,37 @@ type Pod struct {
 	CurrentState PodState          `json:"currentState,omitempty" yaml:"currentState,omitempty"`
 }
 
+type Image struct {
+	JSONBase  `json:",inline" yaml:",inline"`
+	Labels    map[string]string `json:"labels,omitempty" yaml:"labels,omitempty"`
+	Metadata  map[string]string `json:"metadata,omitempty" yaml:"metadata,omitempty"`
+	Reference string            `json:"name,omitempty" yaml:"name,omitempty"`
+}
+
+type ImageList struct {
+	JSONBase `json:",inline" yaml:",inline"`
+	Items    []Image `json:"items,omitempty" yaml:"items,omitempty"`
+}
+
+type ImageRepository struct {
+	JSONBase        `json:",inline" yaml:",inline"`
+	Name            string            `json:"name,omitempty" yaml:"name,omitempty"`
+	Labels          map[string]string `json:"labels,omitempty" yaml:"labels,omitempty"`
+	DefaultMetadata map[string]string `json:"defaultMetadata,omitempty" yaml:"defaultMetadata,omitempty"`
+	Tags            map[string]string `json:"tags,omitempty" yaml:"tags,omitempty"`
+}
+
+type ImageRepositoryList struct {
+	JSONBase `json:",inline" yaml:",inline"`
+	Items    []ImageRepository `json:"items,omitempty" yaml:"items,omitempty"`
+}
+
+type ImageRepositoryMapping struct {
+	JSONBase       `json:",inline" yaml:",inline"`
+	Image          Image  `json:"image,omitempty" yaml:"image,omitempty"`
+	RepositoryName string `json:"repositoryName,omitempty" yaml:"repositoryName,omitempty"`
+}
+
 // ReplicationControllerState is the state of a replication controller, either input (create, update) or as output (list, get)
 type ReplicationControllerState struct {
 	Replicas        int               `json:"replicas" yaml:"replicas"`

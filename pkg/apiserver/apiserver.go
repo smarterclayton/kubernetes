@@ -62,6 +62,21 @@ func NewNotFoundErr(kind, name string) error {
 	return errNotFound(fmt.Sprintf("%s %q not found", kind, name))
 }
 
+type errAlreadyExists string
+
+func (err errAlreadyExists) Error() string {
+	return string(err)
+}
+
+func IsAlreadyExists(err error) bool {
+	_, ok := err.(errAlreadyExists)
+	return ok
+}
+
+func NewAlreadyExistsErr(kind, name string) error {
+	return errAlreadyExists(fmt.Sprintf("%s %q already exists", kind, name))
+}
+
 // RESTStorage is a generic interface for RESTful storage services
 // Resources whicih are exported to the RESTful API of apiserver need to implement this interface.
 type RESTStorage interface {

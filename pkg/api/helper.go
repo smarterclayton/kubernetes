@@ -39,6 +39,11 @@ func init() {
 		Status{},
 		ServerOpList{},
 		ServerOp{},
+		Image{},
+		ImageList{},
+		ImageRepository{},
+		ImageRepositoryList{},
+		ImageRepositoryMapping{},
 	)
 }
 
