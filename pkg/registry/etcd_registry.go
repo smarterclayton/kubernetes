@@ -225,8 +225,11 @@ func (registry *EtcdRegistry) GetController(controllerID string) (*api.Replicati
 
 // CreateController creates a new ReplicationController.
 func (registry *EtcdRegistry) CreateController(controller api.ReplicationController) error {
-	// TODO : check for existence here and error.
-	return registry.UpdateController(controller)
+	err := registry.helper().CreateObj(makeControllerKey(controller.ID), controller)
+	if tools.IsEtcdKeyAlreadyExists(err) {
+		return apiserver.NewAlreadyExistsErr("replicationController", controller.ID)
+	}
+	return err
 }
 
 // UpdateController replaces an existing ReplicationController.

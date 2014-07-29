@@ -18,6 +18,7 @@ package tools
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 
@@ -29,13 +30,15 @@ import (
 )
 
 const (
-	EtcdErrorCodeNotFound      = 100
-	EtcdErrorCodeValueRequired = 200
+	EtcdErrorCodeNotFound         = 100
+	EtcdErrorCodeKeyAlreadyExists = 105
+	EtcdErrorCodeValueRequired    = 200
 )
 
 var (
-	EtcdErrorNotFound      = &etcd.EtcdError{ErrorCode: EtcdErrorCodeNotFound}
-	EtcdErrorValueRequired = &etcd.EtcdError{ErrorCode: EtcdErrorCodeValueRequired}
+	EtcdErrorNotFound         = &etcd.EtcdError{ErrorCode: EtcdErrorCodeNotFound}
+	EtcdErrorKeyAlreadyExists = &etcd.EtcdError{ErrorCode: EtcdErrorCodeKeyAlreadyExists}
+	EtcdErrorValueRequired    = &etcd.EtcdError{ErrorCode: EtcdErrorCodeValueRequired}
 )
 
 // EtcdClient is an injectable interface for testing.
@@ -53,6 +56,7 @@ type EtcdClient interface {
 
 // Interface exposing only the etcd operations needed by EtcdHelper.
 type EtcdGetSet interface {
+	Create(key, value string, ttl uint64) (*etcd.Response, error)
 	Get(key string, sort, recursive bool) (*etcd.Response, error)
 	Set(key, value string, ttl uint64) (*etcd.Response, error)
 	CompareAndSwap(key, value string, ttl uint64, prevValue string, prevIndex uint64) (*etcd.Response, error)
@@ -67,6 +71,11 @@ type EtcdHelper struct {
 // Returns true iff err is an etcd not found error.
 func IsEtcdNotFound(err error) bool {
 	return isEtcdErrorNum(err, 100)
+}
+
+// Returns true iff err is an etcd key alreayd exists error.
+func IsEtcdKeyAlreadyExists(err error) bool {
+	return isEtcdErrorNum(err, 105)
 }
 
 // Returns true iff err is an etcd write conflict.
@@ -154,6 +163,19 @@ func (h *EtcdHelper) bodyAndExtractObj(key string, objPtr interface{}, ignoreNot
 		// This is intentional.
 	}
 	return body, response.Node.ModifiedIndex, err
+}
+
+func (h *EtcdHelper) CreateObj(key string, obj interface{}) error {
+	data, err := json.Marshal(obj)
+	if err != nil {
+		return err
+	}
+	if jsonBase, err := api.FindJSONBaseRO(obj); err == nil && jsonBase.ResourceVersion != 0 {
+		return errors.New("resourceVersion may not be set on created objects")
+	}
+
+	_, err = h.Client.Create(key, string(data), 0)
+	return err
 }
 
 // SetObj marshals obj via json, and stores under key. Will do an
