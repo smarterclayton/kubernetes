@@ -150,20 +150,10 @@ func (s *APIServer) write(statusCode int, object interface{}, w http.ResponseWri
 	w.WriteHeader(statusCode)
 	output, err := api.Encode(object)
 	if err != nil {
-		s.error(err, w)
+		internalError(err, w)
 		return
 	}
 	w.Write(output)
-}
-
-func (s *APIServer) error(err error, w http.ResponseWriter) {
-	w.WriteHeader(http.StatusInternalServerError)
-	fmt.Fprintf(w, "Internal Error: %#v", err)
-}
-
-func (s *APIServer) readBody(req *http.Request) ([]byte, error) {
-	defer req.Body.Close()
-	return ioutil.ReadAll(req.Body)
 }
 
 // finishReq finishes up a request, waiting until the operation finishes or, after a timeout, creating an
@@ -226,12 +216,12 @@ func (s *APIServer) handleREST(parts []string, req *http.Request, w http.Respons
 		case 1:
 			selector, err := labels.ParseSelector(req.URL.Query().Get("labels"))
 			if err != nil {
-				s.error(err, w)
+				internalError(err, w)
 				return
 			}
 			list, err := storage.List(selector)
 			if err != nil {
-				s.error(err, w)
+				internalError(err, w)
 				return
 			}
 			s.write(http.StatusOK, list, w)
@@ -242,7 +232,7 @@ func (s *APIServer) handleREST(parts []string, req *http.Request, w http.Respons
 				return
 			}
 			if err != nil {
-				s.error(err, w)
+				internalError(err, w)
 				return
 			}
 			s.write(http.StatusOK, item, w)
@@ -254,9 +244,9 @@ func (s *APIServer) handleREST(parts []string, req *http.Request, w http.Respons
 			notFound(w, req)
 			return
 		}
-		body, err := s.readBody(req)
+		body, err := readBody(req)
 		if err != nil {
-			s.error(err, w)
+			internalError(err, w)
 			return
 		}
 		obj, err := storage.Extract(body)
@@ -265,7 +255,7 @@ func (s *APIServer) handleREST(parts []string, req *http.Request, w http.Respons
 			return
 		}
 		if err != nil {
-			s.error(err, w)
+			internalError(err, w)
 			return
 		}
 		out, err := storage.Create(obj)
@@ -274,7 +264,7 @@ func (s *APIServer) handleREST(parts []string, req *http.Request, w http.Respons
 			return
 		}
 		if err != nil {
-			s.error(err, w)
+			internalError(err, w)
 			return
 		}
 		s.finishReq(out, sync, timeout, w)
@@ -289,7 +279,7 @@ func (s *APIServer) handleREST(parts []string, req *http.Request, w http.Respons
 			return
 		}
 		if err != nil {
-			s.error(err, w)
+			internalError(err, w)
 			return
 		}
 		s.finishReq(out, sync, timeout, w)
@@ -298,9 +288,9 @@ func (s *APIServer) handleREST(parts []string, req *http.Request, w http.Respons
 			notFound(w, req)
 			return
 		}
-		body, err := s.readBody(req)
+		body, err := readBody(req)
 		if err != nil {
-			s.error(err, w)
+			internalError(err, w)
 			return
 		}
 		obj, err := storage.Extract(body)
@@ -309,7 +299,7 @@ func (s *APIServer) handleREST(parts []string, req *http.Request, w http.Respons
 			return
 		}
 		if err != nil {
-			s.error(err, w)
+			internalError(err, w)
 			return
 		}
 		out, err := storage.Update(obj)
@@ -318,7 +308,7 @@ func (s *APIServer) handleREST(parts []string, req *http.Request, w http.Respons
 			return
 		}
 		if err != nil {
-			s.error(err, w)
+			internalError(err, w)
 			return
 		}
 		s.finishReq(out, sync, timeout, w)
@@ -387,7 +377,7 @@ func (s *APIServer) handleWatch(w http.ResponseWriter, req *http.Request) {
 			watching, err = watcher.WatchAll()
 		}
 		if err != nil {
-			s.error(err, w)
+			internalError(err, w)
 			return
 		}
 
@@ -403,4 +393,9 @@ func (s *APIServer) handleWatch(w http.ResponseWriter, req *http.Request) {
 	}
 
 	notFound(w, req)
+}
+
+func readBody(req *http.Request) ([]byte, error) {
+	defer req.Body.Close()
+	return ioutil.ReadAll(req.Body)
 }
