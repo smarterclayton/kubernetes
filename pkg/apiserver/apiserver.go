@@ -94,14 +94,6 @@ func New(storage map[string]RESTStorage, prefix string) *APIServer {
 	return s
 }
 
-func (s *APIServer) operationPrefix() string {
-	return path.Join(s.prefix, "operations")
-}
-
-func (s *APIServer) watchPrefix() string {
-	return path.Join(s.prefix, "watch")
-}
-
 // HTTP Handler interface
 func (s *APIServer) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	defer func() {
@@ -317,6 +309,10 @@ func (s *APIServer) handleREST(parts []string, req *http.Request, w http.Respons
 	}
 }
 
+func (s *APIServer) operationPrefix() string {
+	return path.Join(s.prefix, "operations")
+}
+
 func (s *APIServer) handleOperationRequest(w http.ResponseWriter, req *http.Request) {
 	opPrefix := s.operationPrefix()
 	if !strings.HasPrefix(req.URL.Path, opPrefix) {
@@ -352,6 +348,10 @@ func (s *APIServer) handleOperationRequest(w http.ResponseWriter, req *http.Requ
 	} else {
 		s.write(http.StatusAccepted, obj, w)
 	}
+}
+
+func (s *APIServer) watchPrefix() string {
+	return path.Join(s.prefix, "watch")
 }
 
 func (s *APIServer) handleWatch(w http.ResponseWriter, req *http.Request) {
