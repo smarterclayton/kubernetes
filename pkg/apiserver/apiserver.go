@@ -137,17 +137,6 @@ func (s *APIServer) handleREST(w http.ResponseWriter, req *http.Request) {
 	s.handleRESTStorage(requestParts, req, w, storage)
 }
 
-func (s *APIServer) write(statusCode int, object interface{}, w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
-	output, err := api.Encode(object)
-	if err != nil {
-		internalError(err, w)
-		return
-	}
-	w.Write(output)
-}
-
 // finishReq finishes up a request, waiting until the operation finishes or, after a timeout, creating an
 // Operation to receive the result and returning its ID down the writer.
 func (s *APIServer) finishReq(out <-chan interface{}, sync bool, timeout time.Duration, w http.ResponseWriter) {
@@ -169,9 +158,9 @@ func (s *APIServer) finishReq(out <-chan interface{}, sync bool, timeout time.Du
 				status = stat.Code
 			}
 		}
-		s.write(status, obj, w)
+		writeJSON(status, obj, w)
 	} else {
-		s.write(http.StatusAccepted, obj, w)
+		writeJSON(http.StatusAccepted, obj, w)
 	}
 }
 
@@ -205,7 +194,7 @@ func (s *APIServer) handleRESTStorage(parts []string, req *http.Request, w http.
 				internalError(err, w)
 				return
 			}
-			s.write(http.StatusOK, list, w)
+			writeJSON(http.StatusOK, list, w)
 		case 2:
 			item, err := storage.Get(parts[1])
 			if IsNotFound(err) {
@@ -216,7 +205,7 @@ func (s *APIServer) handleRESTStorage(parts []string, req *http.Request, w http.
 				internalError(err, w)
 				return
 			}
-			s.write(http.StatusOK, item, w)
+			writeJSON(http.StatusOK, item, w)
 		default:
 			notFound(w, req)
 		}
@@ -321,7 +310,7 @@ func (s *APIServer) handleOperationRequest(w http.ResponseWriter, req *http.Requ
 	if len(parts) == 0 {
 		// List outstanding operations.
 		list := s.ops.List()
-		s.write(http.StatusOK, list, w)
+		writeJSON(http.StatusOK, list, w)
 		return
 	}
 
@@ -333,9 +322,9 @@ func (s *APIServer) handleOperationRequest(w http.ResponseWriter, req *http.Requ
 
 	obj, complete := op.StatusOrResult()
 	if complete {
-		s.write(http.StatusOK, obj, w)
+		writeJSON(http.StatusOK, obj, w)
 	} else {
-		s.write(http.StatusAccepted, obj, w)
+		writeJSON(http.StatusAccepted, obj, w)
 	}
 }
 
@@ -382,6 +371,17 @@ func (s *APIServer) handleWatch(w http.ResponseWriter, req *http.Request) {
 	}
 
 	notFound(w, req)
+}
+
+func writeJSON(statusCode int, object interface{}, w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	output, err := api.Encode(object)
+	if err != nil {
+		internalError(err, w)
+		return
+	}
+	w.Write(output)
 }
 
 func parseTimeout(str string) time.Duration {
