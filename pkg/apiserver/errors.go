@@ -21,6 +21,7 @@ import (
 	"net/http"
 )
 
+// internalError renders a generic error to the response
 func internalError(err error, w http.ResponseWriter) {
 	w.WriteHeader(http.StatusInternalServerError)
 	fmt.Fprintf(w, "Internal Error: %#v", err)
@@ -30,4 +31,10 @@ func internalError(err error, w http.ResponseWriter) {
 func notFound(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusNotFound)
 	fmt.Fprintf(w, "Not Found: %#v", req.RequestURI)
+}
+
+// notFound renders a simple conflict error
+func conflict(w http.ResponseWriter, req *http.Request) {
+	w.WriteHeader(http.StatusConflict)
+	fmt.Fprintf(w, "Conflict: %#v", req)
 }

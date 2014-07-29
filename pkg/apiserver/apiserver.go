@@ -77,29 +77,31 @@ func New(storage map[string]RESTStorage, prefix string) *APIServer {
 		mux:     http.NewServeMux(),
 	}
 
-	s.mux.Handle("/logs/", http.StripPrefix("/logs/", http.FileServer(http.Dir("/var/log/"))))
+	// Primary API methods
 	s.mux.HandleFunc(s.prefix+"/", s.handleREST)
-	healthz.InstallHandler(s.mux)
+	s.mux.HandleFunc(s.watchPrefix()+"/", s.handleWatch)
 
+	// Support services for the apiserver
+	s.mux.Handle("/logs/", http.StripPrefix("/logs/", http.FileServer(http.Dir("/var/log/"))))
+	healthz.InstallHandler(s.mux)
 	s.mux.HandleFunc("/", handleIndex)
 
 	// Handle both operations and operations/* with the same handler
 	s.mux.HandleFunc(s.operationPrefix(), s.handleOperationRequest)
 	s.mux.HandleFunc(s.operationPrefix()+"/", s.handleOperationRequest)
 
-	s.mux.HandleFunc(s.watchPrefix()+"/", s.handleWatch)
-
+	// Proxy minion requests
 	s.mux.HandleFunc("/proxy/minion/", s.handleMinionReq)
 
 	return s
 }
 
-// HTTP Handler interface
+// ServeHTTP implements the standard net/http interface.
 func (s *APIServer) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	defer func() {
 		if x := recover(); x != nil {
 			w.WriteHeader(http.StatusInternalServerError)
-			fmt.Fprint(w, "apiserver panic. Look in log for details.")
+			fmt.Fprint(w, "apis panic. Look in log for details.")
 			glog.Infof("APIServer panic'd on %v %v: %#v\n%s\n", req.Method, req.RequestURI, x, debug.Stack())
 		}
 	}()
@@ -135,33 +137,6 @@ func (s *APIServer) handleREST(w http.ResponseWriter, req *http.Request) {
 	}
 
 	s.handleRESTStorage(requestParts, req, w, storage)
-}
-
-// finishReq finishes up a request, waiting until the operation finishes or, after a timeout, creating an
-// Operation to receive the result and returning its ID down the writer.
-func (s *APIServer) finishReq(out <-chan interface{}, sync bool, timeout time.Duration, w http.ResponseWriter) {
-	op := s.ops.NewOperation(out)
-	if sync {
-		op.WaitFor(timeout)
-	}
-	obj, complete := op.StatusOrResult()
-	if complete {
-		status := http.StatusOK
-		switch stat := obj.(type) {
-		case api.Status:
-			httplog.LogOf(w).Addf("programmer error: use *api.Status as a result, not api.Status.")
-			if stat.Code != 0 {
-				status = stat.Code
-			}
-		case *api.Status:
-			if stat.Code != 0 {
-				status = stat.Code
-			}
-		}
-		writeJSON(status, obj, w)
-	} else {
-		writeJSON(http.StatusAccepted, obj, w)
-	}
 }
 
 // handleRESTStorage is the main dispatcher for the s.  It switches on the HTTP method, and then
@@ -209,6 +184,7 @@ func (s *APIServer) handleRESTStorage(parts []string, req *http.Request, w http.
 		default:
 			notFound(w, req)
 		}
+
 	case "POST":
 		if len(parts) != 1 {
 			notFound(w, req)
@@ -237,7 +213,9 @@ func (s *APIServer) handleRESTStorage(parts []string, req *http.Request, w http.
 			internalError(err, w)
 			return
 		}
-		s.finishReq(out, sync, timeout, w)
+		op := s.createOperation(out, sync, timeout)
+		s.finishReq(op, w)
+
 	case "DELETE":
 		if len(parts) != 2 {
 			notFound(w, req)
@@ -252,7 +230,9 @@ func (s *APIServer) handleRESTStorage(parts []string, req *http.Request, w http.
 			internalError(err, w)
 			return
 		}
-		s.finishReq(out, sync, timeout, w)
+		op := s.createOperation(out, sync, timeout)
+		s.finishReq(op, w)
+
 	case "PUT":
 		if len(parts) != 2 {
 			notFound(w, req)
@@ -281,9 +261,43 @@ func (s *APIServer) handleRESTStorage(parts []string, req *http.Request, w http.
 			internalError(err, w)
 			return
 		}
-		s.finishReq(out, sync, timeout, w)
+		op := s.createOperation(out, sync, timeout)
+		s.finishReq(op, w)
+
 	default:
 		notFound(w, req)
+	}
+}
+
+// createOperation creates an operation to process a channel response
+func (s *APIServer) createOperation(out <-chan interface{}, sync bool, timeout time.Duration) *Operation {
+	op := s.ops.NewOperation(out)
+	if sync {
+		op.WaitFor(timeout)
+	}
+	return op
+}
+
+// finishReq finishes up a request, waiting until the operation finishes or, after a timeout, creating an
+// Operation to receive the result and returning its ID down the writer.
+func (s *APIServer) finishReq(op *Operation, w http.ResponseWriter) {
+	obj, complete := op.StatusOrResult()
+	if complete {
+		status := http.StatusOK
+		switch stat := obj.(type) {
+		case api.Status:
+			httplog.LogOf(w).Addf("programmer error: use *api.Status as a result, not api.Status.")
+			if stat.Code != 0 {
+				status = stat.Code
+			}
+		case *api.Status:
+			if stat.Code != 0 {
+				status = stat.Code
+			}
+		}
+		writeJSON(status, obj, w)
+	} else {
+		writeJSON(http.StatusAccepted, obj, w)
 	}
 }
 
@@ -332,6 +346,7 @@ func (s *APIServer) watchPrefix() string {
 	return path.Join(s.prefix, "watch")
 }
 
+// handleWatch processes a watch request
 func (s *APIServer) handleWatch(w http.ResponseWriter, req *http.Request) {
 	prefix := s.watchPrefix()
 	if !strings.HasPrefix(req.URL.Path, prefix) {
@@ -373,6 +388,7 @@ func (s *APIServer) handleWatch(w http.ResponseWriter, req *http.Request) {
 	notFound(w, req)
 }
 
+// writeJSON renders an object as JSON to the response
 func writeJSON(statusCode int, object interface{}, w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
