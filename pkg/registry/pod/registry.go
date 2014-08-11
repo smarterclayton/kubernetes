@@ -24,10 +24,10 @@ import (
 
 // Registry is an interface implemented by things that know how to store Pod objects.
 type Registry interface {
-	// ListPods obtains a list of pods that match selector.
-	ListPods(selector labels.Selector) (*api.PodList, error)
+	// ListPods obtains a list of pods that match the label and field selectors.
+	ListPods(label, field labels.Selector) (*api.PodList, error)
 	// Watch for new/changed/deleted pods
-	WatchPods(resourceVersion uint64, filter func(*api.Pod) bool) (watch.Interface, error)
+	WatchPods(label, field labels.Selector, resourceVersion uint64) (watch.Interface, error)
 	// Get a specific pod
 	GetPod(podID string) (*api.Pod, error)
 	// Create a pod based on a specification.
@@ -36,4 +36,12 @@ type Registry interface {
 	UpdatePod(pod api.Pod) error
 	// Delete an existing pod
 	DeletePod(podID string) error
+}
+
+// SimplePodListFunc allows casting a Registry to a simpler pod lister.
+type SimplePodListFunc func(label, field labels.Selector) ([]api.Pod, error)
+
+// ListPods implements a simpler pod listing interface
+func (f SimplePodListFunc) ListPods(label labels.Selector) ([]api.Pod, error) {
+	return f(label, labels.Everything())
 }

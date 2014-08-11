@@ -104,8 +104,8 @@ func (rs *RegistryStorage) Get(id string) (interface{}, error) {
 	return pod, err
 }
 
-func (rs *RegistryStorage) List(selector labels.Selector) (interface{}, error) {
-	pods, err := rs.registry.ListPods(selector)
+func (rs *RegistryStorage) List(label, field labels.Selector) (interface{}, error) {
+	pods, err := rs.registry.ListPods(label, field)
 	if err == nil {
 		for i := range pods.Items {
 			pod := &pods.Items[i]
@@ -119,14 +119,7 @@ func (rs *RegistryStorage) List(selector labels.Selector) (interface{}, error) {
 
 // Watch begins watching for new, changed, or deleted pods.
 func (rs *RegistryStorage) Watch(label, field labels.Selector, resourceVersion uint64) (watch.Interface, error) {
-	return rs.registry.WatchPods(resourceVersion, func(pod *api.Pod) bool {
-		fields := labels.Set{
-			"ID": pod.ID,
-			"DesiredState.Status": string(pod.DesiredState.Status),
-			"DesiredState.Host":   pod.DesiredState.Host,
-		}
-		return label.Matches(labels.Set(pod.Labels)) && field.Matches(fields)
-	})
+	return rs.registry.WatchPods(label, field, resourceVersion)
 }
 
 func (rs RegistryStorage) New() interface{} {

@@ -74,12 +74,32 @@ func (h *RESTHandler) handleRESTStorage(parts []string, req *http.Request, w htt
 				errorJSON(err, h.codec, w)
 				return
 			}
-			list, err := storage.List(selector)
-			if err != nil {
-				errorJSON(err, h.codec, w)
-				return
+
+			switch t := storage.(type) {
+			case ResourceLister:
+				list, err := t.List(selector)
+				if err != nil {
+					errorJSON(err, h.codec, w)
+					return
+				}
+				writeJSON(http.StatusOK, h.codec, list, w)
+
+			case ResourceFieldLister:
+				field, err := labels.ParseSelector(req.URL.Query().Get("fields"))
+				if err != nil {
+					errorJSON(err, h.codec, w)
+					return
+				}
+				list, err := t.List(selector, field)
+				if err != nil {
+					errorJSON(err, h.codec, w)
+					return
+				}
+				writeJSON(http.StatusOK, h.codec, list, w)
+
+			default:
+				notFound(w, req)
 			}
-			writeJSON(http.StatusOK, h.codec, list, w)
 		case 2:
 			item, err := storage.Get(parts[1])
 			if err != nil {

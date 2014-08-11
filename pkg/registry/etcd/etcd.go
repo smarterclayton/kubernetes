@@ -17,6 +17,7 @@ limitations under the License.
 package etcd
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
@@ -58,16 +59,30 @@ func makePodKey(podID string) string {
 	return "/registry/pods/" + podID
 }
 
-// ListPods obtains a list of pods that match selector.
-func (r *Registry) ListPods(selector labels.Selector) (*api.PodList, error) {
-	allPods := api.PodList{}
-	err := r.ExtractList("/registry/pods", &allPods.Items, &allPods.ResourceVersion)
-	if err != nil {
+// ListPods obtains a list of pods that match the field or label selectors.
+func (r *Registry) ListPods(label, field labels.Selector) (*api.PodList, error) {
+
+	// get the pods that should be on a host
+	// TODO: replace this transformation with scanning for pods by their CurrentState.Host, once
+	// a rectification loop exists
+	if host, ok := field.RequiresExactMatch("CurrentState.Host"); ok {
+		if !label.Empty() {
+			return nil, errors.New("label selectors are not allowed when retrieving pods for a host")
+		}
+		manifests := &api.ContainerManifestList{}
+		if err := r.ExtractObj(makeContainerKey(host), manifests, false); err != nil {
+			return nil, err
+		}
+		return transformManifestListToPodList(host, manifests)
+	}
+
+	allPods := &api.PodList{}
+	if err := r.ExtractList("/registry/pods", &allPods.Items, &allPods.ResourceVersion); err != nil {
 		return nil, err
 	}
 	filtered := []api.Pod{}
 	for _, pod := range allPods.Items {
-		if selector.Matches(labels.Set(pod.Labels)) {
+		if label.Matches(labels.Set(pod.Labels)) {
 			// TODO: Currently nothing sets CurrentState.Host. We need a feedback loop that sets
 			// the CurrentState.Host and Status fields. Here we pretend that reality perfectly
 			// matches our desires.
@@ -76,18 +91,33 @@ func (r *Registry) ListPods(selector labels.Selector) (*api.PodList, error) {
 		}
 	}
 	allPods.Items = filtered
-	return &allPods, nil
+	return allPods, nil
 }
 
 // WatchPods begins watching for new, changed, or deleted pods.
-func (r *Registry) WatchPods(resourceVersion uint64, filter func(*api.Pod) bool) (watch.Interface, error) {
-	return r.WatchList("/registry/pods", resourceVersion, func(obj interface{}) bool {
-		pod, ok := obj.(*api.Pod)
-		if !ok {
-			glog.Errorf("Unexpected object during pod watch: %#v", obj)
-			return false
+func (r *Registry) WatchPods(label, field labels.Selector, resourceVersion uint64) (watch.Interface, error) {
+	// watch the pods that should be on a host
+	// TODO: if bindings set CurrentState.Host directly this can be used generically.
+	if host, ok := field.RequiresExactMatch("CurrentState.Host"); ok {
+		if !label.Empty() {
+			return nil, errors.New("label selectors are not allowed when watching a host")
 		}
-		return filter(pod)
+		w, err := r.Watch(makeContainerKey(host), resourceVersion)
+		if err != nil {
+			return nil, err
+		}
+		return NewMinionPodWatch(host, w), nil
+	}
+
+	// watch pods
+	return r.WatchList("/registry/pods", resourceVersion, func(obj interface{}) bool {
+		pod := obj.(*api.Pod)
+		fields := labels.Set{
+			"ID": pod.ID,
+			"DesiredState.Status": string(pod.CurrentState.Status),
+			"DesiredState.Host":   pod.CurrentState.Host,
+		}
+		return label.Matches(labels.Set(pod.Labels)) && field.Matches(fields)
 	})
 }
 

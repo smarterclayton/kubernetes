@@ -28,10 +28,6 @@ type RESTStorage interface {
 	// This object must be a pointer type for use with Codec.DecodeInto([]byte, interface{})
 	New() interface{}
 
-	// List selects resources in the storage which match to the selector.
-	// TODO: add field selector in addition to label selector.
-	List(labels.Selector) (interface{}, error)
-
 	// Get finds a resource in the storage by id and returns it.
 	// Although it can return an arbitrary error value, IsNotFound(err) is true for the
 	// returned error value err when the specified resource is not found.
@@ -44,6 +40,18 @@ type RESTStorage interface {
 
 	Create(interface{}) (<-chan interface{}, error)
 	Update(interface{}) (<-chan interface{}, error)
+}
+
+// ResourceLister is the simplest list interface
+type ResourceLister interface {
+	// List selects resources in the storage which match to the label selector.
+	List(labels.Selector) (interface{}, error)
+}
+
+// ResourceFieldLister allows field and label selection on a resource
+type ResourceFieldLister interface {
+	// List selects resources in the storage which match to the label and field selectors.
+	List(label, field labels.Selector) (interface{}, error)
 }
 
 // ResourceWatcher should be implemented by all RESTStorage objects that

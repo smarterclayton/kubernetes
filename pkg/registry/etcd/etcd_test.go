@@ -408,7 +408,7 @@ func TestEtcdEmptyListPods(t *testing.T) {
 		E: nil,
 	}
 	registry := NewTestEtcdRegistry(fakeClient)
-	pods, err := registry.ListPods(labels.Everything())
+	pods, err := registry.ListPods(labels.Everything(), labels.Everything())
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -426,7 +426,7 @@ func TestEtcdListPodsNotFound(t *testing.T) {
 		E: tools.EtcdErrorNotFound,
 	}
 	registry := NewTestEtcdRegistry(fakeClient)
-	pods, err := registry.ListPods(labels.Everything())
+	pods, err := registry.ListPods(labels.Everything(), labels.Everything())
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -461,7 +461,7 @@ func TestEtcdListPods(t *testing.T) {
 		E: nil,
 	}
 	registry := NewTestEtcdRegistry(fakeClient)
-	pods, err := registry.ListPods(labels.Everything())
+	pods, err := registry.ListPods(labels.Everything(), labels.Everything())
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -472,6 +472,48 @@ func TestEtcdListPods(t *testing.T) {
 	if pods.Items[0].CurrentState.Host != "machine" ||
 		pods.Items[1].CurrentState.Host != "machine" {
 		t.Errorf("Failed to populate host name.")
+	}
+}
+
+func TestEtcdListPodsOnHost(t *testing.T) {
+	fakeClient := tools.NewFakeEtcdClient(t)
+	key := "/registry/hosts/machine/kubelet"
+	fakeClient.Data[key] = tools.EtcdResponseWithError{
+		R: &etcd.Response{
+			Node: &etcd.Node{
+				Value: api.EncodeOrDie(api.ContainerManifestList{
+					JSONBase: api.JSONBase{ID: "machine", ResourceVersion: 2},
+					Items: []api.ContainerManifest{
+						{
+							Version: "v1beta2",
+							ID:      "foo",
+						},
+						{
+							Version: "v1beta2",
+							ID:      "bar",
+						},
+					},
+				}),
+				ModifiedIndex: 3,
+			},
+		},
+		E: nil,
+	}
+	registry := NewTestEtcdRegistry(fakeClient)
+	pods, err := registry.ListPods(labels.Everything(), labels.SelectorFromSet(labels.Set{"CurrentState.Host": "machine"}))
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	if len(pods.Items) != 2 || pods.Items[0].ID != "foo" || pods.Items[1].ID != "bar" {
+		t.Errorf("Unexpected pod list: %#v", pods)
+	}
+	if pods.Items[0].CurrentState.Host != "machine" ||
+		pods.Items[1].CurrentState.Host != "machine" {
+		t.Errorf("Failed to populate host name: %#v", pods)
+	}
+	if pods.ResourceVersion != 3 {
+		t.Errorf("Failed to populate resource version %#v", pods)
 	}
 }
 
@@ -490,6 +532,53 @@ func TestEtcdListControllersNotFound(t *testing.T) {
 
 	if len(controllers.Items) != 0 {
 		t.Errorf("Unexpected controller list: %#v", controllers)
+	}
+}
+
+func TestEtcdWatchPods(t *testing.T) {
+	fakeClient := tools.NewFakeEtcdClient(t)
+	registry := NewTestEtcdRegistry(fakeClient)
+	watching, err := registry.WatchPods(
+		labels.Everything(),
+		labels.SelectorFromSet(labels.Set{"CurrentState.Host": "foo"}),
+		1,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	fakeClient.WaitForWatchCompletion()
+
+	select {
+	case _, ok := <-watching.ResultChan():
+		if !ok {
+			t.Errorf("watching channel should be open")
+		}
+	default:
+	}
+	fakeClient.WatchInjectError <- nil
+	if _, ok := <-watching.ResultChan(); ok {
+		t.Errorf("watching channel should be closed")
+	}
+	watching.Stop()
+}
+
+func TestEtcdWatchPodsInvalidOptions(t *testing.T) {
+	testCases := []struct {
+		Label labels.Selector
+		Field labels.Selector
+	}{
+		{
+			labels.SelectorFromSet(labels.Set{"foo": "bar"}),
+			labels.SelectorFromSet(labels.Set{"CurrentState.Host": "test"}),
+		},
+	}
+	for i, testCase := range testCases {
+		fakeClient := tools.NewFakeEtcdClient(t)
+		registry := NewTestEtcdRegistry(fakeClient)
+		_, err := registry.WatchPods(testCase.Label, testCase.Field, 1)
+		if err == nil {
+			t.Errorf("%d: unexpected non-error: %v", i, err)
+		}
 	}
 }
 

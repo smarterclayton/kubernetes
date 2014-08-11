@@ -104,7 +104,7 @@ func TestListPodsError(t *testing.T) {
 	storage := RegistryStorage{
 		registry: podRegistry,
 	}
-	pods, err := storage.List(labels.Everything())
+	pods, err := storage.List(labels.Everything(), labels.Everything())
 	if err != podRegistry.Err {
 		t.Errorf("Expected %#v, Got %#v", podRegistry.Err, err)
 	}
@@ -118,7 +118,7 @@ func TestListEmptyPodList(t *testing.T) {
 	storage := RegistryStorage{
 		registry: podRegistry,
 	}
-	pods, err := storage.List(labels.Everything())
+	pods, err := storage.List(labels.Everything(), labels.Everything())
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestListPodList(t *testing.T) {
 	storage := RegistryStorage{
 		registry: podRegistry,
 	}
-	podsObj, err := storage.List(labels.Everything())
+	podsObj, err := storage.List(labels.Everything(), labels.Everything())
 	pods := podsObj.(*api.PodList)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)

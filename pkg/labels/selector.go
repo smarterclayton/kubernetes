@@ -227,3 +227,17 @@ func ParseSelector(selector string) (Selector, error) {
 	}
 	return andTerm(items), nil
 }
+
+// SelectorHasLabelRequirement allows a caller to introspect whether a given selector
+// requires a specific label to be set, and if so returns the value it requires.  In
+// any other case it returns false.
+// TODO: allow field selectors to more generally decompose a selector for generating
+// structural logic on an underlying store.
+func SelectorHasLabelRequirement(selector Selector, label string) (string, bool) {
+	if term, ok := selector.(*hasTerm); ok {
+		if term.label == label {
+			return term.value, true
+		}
+	}
+	return "", false
+}

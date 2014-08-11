@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/apiserver"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 )
 
@@ -67,7 +68,7 @@ func TestMinionRegistryStorage(t *testing.T) {
 		t.Errorf("delete returned wrong error")
 	}
 
-	list, err := ms.List(labels.Everything())
+	list, err := ms.(apiserver.ResourceLister).List(labels.Everything())
 	if err != nil {
 		t.Errorf("got error calling List")
 	}

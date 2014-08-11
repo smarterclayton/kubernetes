@@ -148,7 +148,7 @@ func (rs *RegistryStorage) Watch(label, field labels.Selector, resourceVersion u
 
 func (rs *RegistryStorage) waitForController(ctrl api.ReplicationController) (interface{}, error) {
 	for {
-		pods, err := rs.podRegistry.ListPods(labels.Set(ctrl.DesiredState.ReplicaSelector).AsSelector())
+		pods, err := rs.podRegistry.ListPods(labels.Set(ctrl.DesiredState.ReplicaSelector).AsSelector(), labels.Everything())
 		if err != nil {
 			return ctrl, err
 		}
