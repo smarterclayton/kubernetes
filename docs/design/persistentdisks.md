@@ -31,12 +31,12 @@ Improve generic scheduler and predicates to enforce:
 * Continue to use API credentials for cloud providers read via io.Reader, as implemented for GCE.
 
 Editor's note:  Pods that require volumes should not start if that volume fails to mount.  This, to me, strongly implies linear flow where
-kubelet first mounts a drive and then starts a pod.
+kubelet first attaches a device then mounts a filesystem and then starts a pod.
 
-On pod exit, unmount volumes.  Pod death = orphaned volume is still mounted.
+On pod exit, unmount volumes.  Pod death = orphaned volume is still mounted. (This will need to be fixed, as pod death would then keep the device attached and scheduler wouldn't be able to move to next minion for pod create.)
 
 Kubelet's control loop already reconciles pods according to state stored in etcd.  Include volume reconciliation in this loop.
-Unmount volumes that have been orphaned.
+Unmount volumes that have been orphaned.  (This conflicts with above.)
 
 Unmounting a volume requires state change to PersistentDisk.Status
 
@@ -45,7 +45,7 @@ Unmounting a volume requires state change to PersistentDisk.Status
 * Existing named disks are supported in GCE.
 * New disks
     1 Must be created by the API and its ID stored
-    2 Must be formatted with a filesystem after mounting
+    2 Must be formatted with a filesystem after attaching.
 
 
 ## <a name=schema></a>Schema
