@@ -77,7 +77,7 @@ struct PersistentDisk {
 struct DiskSpec {
 
 
-    // based on the type (GCE, AWS, NFS), some attributes are relevant and others are not.
+    // based on the type (GCE, AWS, NFS) some attributes are relevant and others are not.
     Type        PersistentDiskType
 
     // Unique name of the PD resource. Used to identify the disk in a cloud provider
@@ -96,20 +96,33 @@ struct DiskSpec {
     
     // the requested disk size in gb
     Size        int
+
     
-	// Optional: Defaults to false (read/write). ReadOnly here will force
-	// the ReadOnly setting in VolumeMounts.
-    ReadOnly    bool
+    // From mount(2)
+    // Required: Server hosting NFS server
+    // NFS: host name or IP address
+    Server      string
     
-    // ? this is on Status but NFS requires mounting to a named pet ...
-    // only applicable to NFS PersistentDiskType
-    Host
-    LocalMountPoint
-    RemoteMountPoint
-    NFSOptions
+    // Required: File system to be attached
+    // NFS: path
+    Source      string
+    
+    // Required: Filesystem type to mount.
+    // Must be a filesystem type supported by the host operating system.
+    // Ex. "ext4", "xfs", "ntfs"
+    FSType      string
+    
+    // Required: Constants from sys/mount.h
+    MountFlags  uint64
+    
+    // Options understood by the file system type provided by FSTYPE, see nfs(5) for details
+    // nfs: hard,rsize=xxx,wsize=yyy,noac
+    Options     string
 }
 
 struct DiskStatus {
+
+    // PodCondition recently became PodPhase - see https://github.com/GoogleCloudPlatform/kubernetes/pull/2522
     Condition   DiskCondition
     
     // a disk can be mounted on many hosts, depending on type
@@ -125,17 +138,19 @@ struct Mount struct {
 
 
 type PersistentDiskType string
-type MountCondition string
+type DiskCondition string
 
 const (
-    MountPending    MountCondition = "Pending"
-    Mounted         MountCondition = "Mounted"
-    MountFailed     MountCondition = "Failed"
+    MountPending    DiskCondition = "Pending"
+    Attached        DiskCondition = "Attached"
+    Mounted         DiskCondition = "Mounted"
+    MountFailed     DiskCondition = "Failed"
 )
 
 const (
     AWSPersistentDiskType PersistentDiskType  = "aws"
     GCEPersistentDiskType PersistentDiskType  = "gce"
+    NFSPersistentDiskType PersistentDiskType  = "nfs"
 )
 
 type VolumeSource struct {
@@ -154,12 +169,3 @@ type VolumeSource struct {
 }
 
 ```
-
-## <a name="readonly"></a>ReadOnly attribute placement
-
-If the ReadOnly attribute is on the top level PersistentDisk struct, then a user would be forced to make 2 disk definitions in 
-json:  one for read/write and one for read-only.   This would require two pod definitions in json, one using read/write
-and potentially many (via replController) using read-only.  Scheduler and predicates enforces the rules for a single read/write.
-
-If the ReadOnly attribute is on the lower VolumeSource struct, then there would be a single PersistentDisk definition
-but still 2 pod definitions (same as above).  I prefer this normalization as the only attribute to change is located with the pod.
