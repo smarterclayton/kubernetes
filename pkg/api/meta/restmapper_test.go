@@ -91,6 +91,41 @@ func TestRESTMapperVersionAndKindForResource(t *testing.T) {
 	}
 }
 
+func TestAllResources(t *testing.T) {
+	testCases := []struct {
+		Resource   string
+		APIVersion string
+		MixedCase  bool
+		Expected   string
+	}{
+		{Resource: "internalobject", APIVersion: "test", Expected: "internalobjects"},
+		{Resource: "internalobjects", APIVersion: "test", Expected: "internalobjects"},
+
+		{Resource: "InternalObject", APIVersion: "test", MixedCase: false, Expected: "internalobjects"},
+		{Resource: "InternalObjects", APIVersion: "test", MixedCase: false, Expected: "internalobjects"},
+
+		// to test capitalization
+		{Resource: "InternalObject", APIVersion: "test", MixedCase: true, Expected: "internalobjects"},
+		{Resource: "InternalObjects", APIVersion: "test", MixedCase: true, Expected: "internalobjects"},
+	}
+	for _, testCase := range testCases {
+		mapper := NewDefaultRESTMapper([]string{"test"}, fakeInterfaces)
+		scheme := runtime.NewScheme()
+		scheme.AddKnownTypes("test", &InternalObject{})
+		mixedCase := false
+		mapper.Add(scheme, mixedCase, "test")
+		resources := mapper.AllResources()
+		if len(resources) != 1 {
+			t.Errorf("Expected 1 resource")
+		}
+		for _, r := range resources {
+			if r != testCase.Expected {
+				t.Errorf("Expected %s got %s", testCase.Expected, r)
+			}
+		}
+	}
+}
+
 func TestKindToResource(t *testing.T) {
 	testCases := []struct {
 		Kind             string

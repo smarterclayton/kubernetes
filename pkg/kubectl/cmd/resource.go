@@ -18,14 +18,125 @@ package cmd
 
 import (
 	"fmt"
+	"io"
+	"strings"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/meta"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/validation"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubectl"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
-
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
+	"github.com/golang/glog"
 	"github.com/spf13/cobra"
 )
+
+// Resource defines interface for resources
+type Resource interface {
+	Delete(io.Writer) error
+	Get(io.Writer) (runtime.Object, error)
+}
+
+// ResourceInfo contains temporary info to execute REST call
+type ResourceInfo struct {
+	Client    kubectl.RESTClient
+	Mapping   *meta.RESTMapping
+	Namespace string
+	Name      string
+}
+
+func NewResourceInfo(client kubectl.RESTClient, mapping *meta.RESTMapping, namespace, name string) *ResourceInfo {
+	return &ResourceInfo{
+		Client:    client,
+		Mapping:   mapping,
+		Namespace: namespace,
+		Name:      name,
+	}
+}
+
+func (r *ResourceInfo) Delete(out io.Writer) error {
+	err := kubectl.NewRESTHelper(r.Client, r.Mapping).Delete(r.Namespace, r.Name)
+	if err == nil {
+		fmt.Fprintf(out, "%s\n", r.Name)
+	}
+	return err
+}
+
+func (r *ResourceInfo) Get(out io.Writer) (runtime.Object, error) {
+	var labelSelector labels.Selector = nil
+	return kubectl.NewRESTHelper(r.Client, r.Mapping).Get(r.Namespace, r.Name, labelSelector)
+}
+
+// ResourceSelector is a facade for all the resources fetched via label selector
+type ResourceSelector struct {
+	Client    kubectl.RESTClient
+	Mapping   *meta.RESTMapping
+	Namespace string
+	Selector  labels.Selector
+}
+
+func NewResourceSelector(client kubectl.RESTClient, mapping *meta.RESTMapping, namespace string, selector labels.Selector) *ResourceSelector {
+	return &ResourceSelector{
+		Client:    client,
+		Mapping:   mapping,
+		Namespace: namespace,
+		Selector:  selector,
+	}
+}
+
+func (r *ResourceSelector) Delete(out io.Writer) error {
+	obj, err := r.Get(out)
+	if err != nil {
+		return err
+	}
+	objs, _ := runtime.ExtractList(obj)
+	for _, o := range objs {
+		name, err := r.Mapping.MetadataAccessor.Name(o)
+		if err == nil && name != "" {
+			err = NewResourceInfo(r.Client, r.Mapping, r.Namespace, name).Delete(out)
+			if err != nil {
+				glog.Errorf("Unable to delete resource %s", name)
+			}
+		}
+	}
+	return nil
+}
+
+func (r *ResourceSelector) Get(out io.Writer) (runtime.Object, error) {
+	return kubectl.NewRESTHelper(r.Client, r.Mapping).List(r.Namespace, r.Selector)
+}
+
+// ResourcesFromArgsOrFile: compute a list of of Resources
+// extracting info from filename or  args
+func ResourcesFromArgsOrFile(cmd *cobra.Command, args []string, filename, selector string, typer runtime.ObjectTyper, mapper meta.RESTMapper, clientBuilder func(cmd *cobra.Command, mapping *meta.RESTMapping) (kubectl.RESTClient, error), schema validation.Schema) (resources []Resource) {
+
+	if len(selector) == 0 { // handling filename & resource id
+		mapping, namespace, name := ResourceFromArgsOrFile(cmd, args, filename, typer, mapper, schema)
+		client, err := clientBuilder(cmd, mapping)
+		checkErr(err)
+		resources = append(resources, NewResourceInfo(client, mapping, namespace, name))
+		return
+	}
+	labelSelector, err := labels.ParseSelector(selector)
+	checkErr(err)
+	for _, a := range args {
+		for _, arg := range SplitResourceArgument(a, mapper) {
+			resource := kubectl.ExpandResourceShortcut(arg)
+			if len(resource) == 0 {
+				usageError(cmd, "Unknown resource %s", resource)
+			}
+			version, kind, err := mapper.VersionAndKindForResource(resource)
+			checkErr(err)
+			mapping, err := mapper.RESTMapping(version, kind)
+			checkErr(err)
+			client, err := clientBuilder(cmd, mapping)
+			checkErr(err)
+			namespace := GetKubeNamespace(cmd)
+			resources = append(resources, NewResourceSelector(client, mapping, namespace, labelSelector))
+		}
+	}
+	return
+}
 
 // ResourceFromArgsOrFile expects two arguments or a valid file with a given type, and extracts
 // the fields necessary to uniquely locate a resource. Displays a usageError if that contract is
@@ -165,4 +276,18 @@ func CompareNamespaceFromFile(cmd *cobra.Command, namespace string) error {
 		}
 	}
 	return nil
+}
+
+func SplitResourceArgument(arg string, mapper meta.RESTMapper) []string {
+	set := util.NewStringSet()
+	values := strings.Split(arg, ",")
+	for _, s := range values {
+		switch s {
+		case "all":
+			set.Insert(mapper.AllResources()...)
+		default:
+			set.Insert(s)
+		}
+	}
+	return set.List()
 }

@@ -17,18 +17,17 @@ limitations under the License.
 package cmd
 
 import (
-	"fmt"
 	"io"
 
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubectl"
+	"github.com/golang/glog"
 	"github.com/spf13/cobra"
 )
 
 func (f *Factory) NewCmdDelete(out io.Writer) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "delete ([-f filename] | (<resource> <id>))",
+		Use:   "delete ([-f filename] | (<resource> <id>) | [<resource> -l <label>])",
 		Short: "Delete a resource by filename, stdin or resource and id",
-		Long: `Delete a resource by filename, stdin or resource and id.
+		Long: `Delete a resource by filename, stdin, resource and id or by resources and label selector.
 
 JSON and YAML formats are accepted.
 
@@ -46,21 +45,29 @@ Examples:
   $ cat pod.json | kubectl delete -f -
   <delete a pod based on the type and id in the json passed into stdin>
 
+  $ kubectl delete all -l name=myLabel
+  <delete all resources with label name=myLabel>
+
+  $ kubectl delete pods,services -l name=myLabel
+  <delete pods and services with label name=myLabel>
+
   $ kubectl delete pod 1234-56-7890-234234-456456
   <delete a pod with ID 1234-56-7890-234234-456456>`,
 		Run: func(cmd *cobra.Command, args []string) {
 			filename := GetFlagString(cmd, "filename")
 			schema, err := f.Validator(cmd)
 			checkErr(err)
-			mapping, namespace, name := ResourceFromArgsOrFile(cmd, args, filename, f.Typer, f.Mapper, schema)
-			client, err := f.Client(cmd, mapping)
-			checkErr(err)
-
-			err = kubectl.NewRESTHelper(client, mapping).Delete(namespace, name)
-			checkErr(err)
-			fmt.Fprintf(out, "%s\n", name)
+			selector := GetFlagString(cmd, "selector")
+			data := ResourcesFromArgsOrFile(cmd, args, filename, selector, f.Typer, f.Mapper, f.Client, schema)
+			if len(data) == 0 {
+				glog.Warningf("No resource found")
+			}
+			for _, resource := range data {
+				resource.Delete(out)
+			}
 		},
 	}
 	cmd.Flags().StringP("filename", "f", "", "Filename or URL to file to use to delete the resource")
+	cmd.Flags().StringP("selector", "l", "", "Selector (label query) to filter on")
 	return cmd
 }

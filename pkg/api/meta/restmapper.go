@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 )
 
 // typeMeta is used as a key for lookup in the mapping between REST path and
@@ -119,6 +120,18 @@ func (m *DefaultRESTMapper) VersionAndKindForResource(resource string) (defaultV
 		return "", "", fmt.Errorf("no resource %q has been defined", resource)
 	}
 	return meta.APIVersion, meta.Kind, nil
+}
+
+// AllResources returns all known resources (plural form only)
+func (m *DefaultRESTMapper) AllResources() []string {
+	s := util.NewStringSet()
+	for key := range m.mapping {
+		if string(key[len(key)-1]) == "s" {
+			key = strings.ToLower(key)
+			s.Insert(key)
+		}
+	}
+	return s.List()
 }
 
 // RESTMapping returns a struct representing the resource path and conversion interfaces a
