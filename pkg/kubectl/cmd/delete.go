@@ -17,15 +17,18 @@ limitations under the License.
 package cmd
 
 import (
+	"fmt"
 	"io"
 
 	"github.com/golang/glog"
 	"github.com/spf13/cobra"
+
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubectl"
 )
 
 func (f *Factory) NewCmdDelete(out io.Writer) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "delete ([-f filename] | (<resource> <id>) | [<resource> -l <label>])",
+		Use:   "delete ([-f filename] | (<resource> [(<id> | -l <label>)]",
 		Short: "Delete a resource by filename, stdin or resource and id",
 		Long: `Delete a resource by filename, stdin, resource and id or by resources and label selector.
 
@@ -58,12 +61,17 @@ Examples:
 			schema, err := f.Validator(cmd)
 			checkErr(err)
 			selector := GetFlagString(cmd, "selector")
-			data := ResourcesFromArgsOrFile(cmd, args, filename, selector, f.Typer, f.Mapper, f.Client, schema)
-			if len(data) == 0 {
-				glog.Warningf("No resource found")
-			}
-			for _, resource := range data {
-				resource.Delete(out)
+			found := 0
+			ResourcesFromArgsOrFile(cmd, args, filename, selector, f.Typer, f.Mapper, f.Client, schema).Visit(func(r *ResourceInfo) error {
+				found++
+				if err := kubectl.NewRESTHelper(r.Client, r.Mapping).Delete(r.Namespace, r.Name); err != nil {
+					return err
+				}
+				fmt.Fprintf(out, "%s\n", r.Name)
+				return nil
+			})
+			if found == 0 {
+				glog.V(2).Infof("No resource(s) found")
 			}
 		},
 	}
