@@ -861,13 +861,50 @@ func TestValidateService(t *testing.T) {
 		{
 			name: "invalid id",
 			svc: api.Service{
-				ObjectMeta: api.ObjectMeta{Name: "123abc", Namespace: api.NamespaceDefault},
+				ObjectMeta: api.ObjectMeta{Name: "-123abc", Namespace: api.NamespaceDefault},
 				Spec: api.ServiceSpec{
 					Port:     8675,
 					Selector: map[string]string{"foo": "bar"},
 				},
 			},
 			// Should fail because the ID is invalid.
+			numErrs: 1,
+		},
+		{
+			name: "invalid generate.base",
+			svc: api.Service{
+				ObjectMeta: api.ObjectMeta{
+					Name: "valid",
+					GenerateName: &api.GenerateNameSpec{
+						Base: "-123abc",
+					},
+					Namespace: api.NamespaceDefault,
+				},
+				Spec: api.ServiceSpec{
+					Port:     8675,
+					Selector: map[string]string{"foo": "bar"},
+				},
+			},
+			// Should fail because the Base value for generation is invalid
+			numErrs: 1,
+		},
+		{
+			name: "invalid generate.type",
+			svc: api.Service{
+				ObjectMeta: api.ObjectMeta{
+					Name: "valid",
+					GenerateName: &api.GenerateNameSpec{
+						Base: "abc123",
+						Type: api.GenerateNameType("foozle"),
+					},
+					Namespace: api.NamespaceDefault,
+				},
+				Spec: api.ServiceSpec{
+					Port:     8675,
+					Selector: map[string]string{"foo": "bar"},
+				},
+			},
+			// Should fail because the generate name type is invalid.
 			numErrs: 1,
 		},
 		{
@@ -1326,15 +1363,19 @@ func TestValidateMinion(t *testing.T) {
 	successCases := []api.Node{
 		{
 			ObjectMeta: api.ObjectMeta{
-				Name:   "abc",
-				Labels: validSelector,
+				Name:      "abc",
+				Namespace: api.NamespaceDefault,
+				Labels:    validSelector,
 			},
 			Status: api.NodeStatus{
 				HostIP: "something",
 			},
 		},
 		{
-			ObjectMeta: api.ObjectMeta{Name: "abc"},
+			ObjectMeta: api.ObjectMeta{
+				Name:      "abc",
+				Namespace: api.NamespaceDefault,
+			},
 			Status: api.NodeStatus{
 				HostIP: "something",
 			},
@@ -1349,8 +1390,19 @@ func TestValidateMinion(t *testing.T) {
 	errorCases := map[string]api.Node{
 		"zero-length Name": {
 			ObjectMeta: api.ObjectMeta{
-				Name:   "",
-				Labels: validSelector,
+				Namespace: api.NamespaceDefault,
+				Name:      "",
+				Labels:    validSelector,
+			},
+			Status: api.NodeStatus{
+				HostIP: "something",
+			},
+		},
+		"zero-length Namespace": {
+			ObjectMeta: api.ObjectMeta{
+				Namespace: "",
+				Name:      "name",
+				Labels:    validSelector,
 			},
 			Status: api.NodeStatus{
 				HostIP: "something",
@@ -1358,8 +1410,9 @@ func TestValidateMinion(t *testing.T) {
 		},
 		"invalid-labels": {
 			ObjectMeta: api.ObjectMeta{
-				Name:   "abc-123",
-				Labels: invalidSelector,
+				Namespace: api.NamespaceDefault,
+				Name:      "abc-123",
+				Labels:    invalidSelector,
 			},
 		},
 		"invalid-annotations": {

@@ -73,6 +73,23 @@ type ListMeta struct {
 	ResourceVersion string `json:"resourceVersion,omitempty"`
 }
 
+type GenerateNameType string
+
+const (
+	GenerateNameSuffixType GenerateNameType = "Suffix"
+	GenerateNamePrefixType GenerateNameType = "Prefix"
+)
+
+// GenerateNameSpec defines how an object name will be made unique on creation. If specified
+// when an object is created, the existing Name field has no meaning.
+type GenerateNameSpec struct {
+	// Base the value that will be made unique into Name.
+	Base string
+	// Type defines how Base will be modified. The default is "Suffix" - a unique
+	// value will be appended to the name.  "Prefix" will prepend a unique value to the name.
+	Type GenerateNameType
+}
+
 // ObjectMeta is metadata that all persisted resources must have, which includes all objects
 // users must create.
 type ObjectMeta struct {
@@ -81,6 +98,14 @@ type ObjectMeta struct {
 	// automatically. Name is primarily intended for creation idempotence and configuration
 	// definition.
 	Name string `json:"name,omitempty"`
+
+	// GenerateName indicates that the name should be made unique by the server prior to persisting
+	// it. The presence of the field indicates the name will be made unique (and thus the name
+	// returned to the client will be different than the name passed).  If this field is specified,
+	// the server will NOT return a 409 if Name exists - instead, it will either return 201 Created
+	// or 500 with Reason TryAgainLater indicating a unique name could not be found in the time
+	// allotted, and the client should retry (optionally with the Retry-After header).
+	GenerateName *GenerateNameSpec `json:"generateName,omitempty"`
 
 	// Namespace defines the space within which name must be unique. An empty namespace is
 	// equivalent to the "default" namespace, but "default" is the canonical representation.
