@@ -1,35 +1,47 @@
 # Secret Distribution
+
 ## Abstract
-A proposal for the distribution of secrets (passwords, keys, etc) to containers inside Kubernetes using a custom volume type.
+
+A proposal for the distribution of secrets (passwords, keys, etc) to containers inside Kubernetes
+using a custom volume type.
 
 ## Motivation
 
-Secrets are needed in containers to access internal resources like the Kubernetes master or external resources such as git repositories, databases, etc. 
+Secrets are needed in containers to access internal resources like the Kubernetes master or
+external resources such as git repositories, databases, etc. 
 
-A goal of this design is to eliminate or minimize the modifications to containers in order to access secrets. Secrets should be placed where the container expects them to be.
+A goal of this design is to eliminate or minimize the modifications to containers in order to
+access secrets. Secrets should be placed where the container expects them to be.
+
+## Constraints and Assumptions
+
+* This design does not prescribe a method for storing/transmitting secrets
+* Encryption and node security are orthogonal concerns
+* It is assumed that node and master are secure and that compromising their security could also
+  compromise secrets.
 
 ## Use Cases
 
-1. Access the Kubernetes master using a custom .dockercfg
-2. Access DockerHub using credentials from .dockercfg
-3. Access a GitHub repository using SSH keys
+1. As a cluster operator, I want to allow a pod to access the Kubernetes master using a custom
+   .kubeconfig, so that I can securely reach the master
+2. As a cluster operator, I want to allow a pod to access the DockerHub using credentials from a
+   .dockercfg file, so that pods can push images to the DockerHub
+3. As a cluster operator, I want to allow a pod to access a GitHub repository using SSH keys, so
+   that I can push and fetch to and from the repository
 4. Access a super secret service using a set of keys
 
-
-## Constraints and Assumptions
-* This design does not prescribe a method for storing/transmitting secrets
-* Encryption and node security are orthogonal concerns
-* It is assumed that node and master are secure and that compromising their security could also compromise secrets.
 
 ## Proposed Design
 
 ### Overview
-This design proposes mounting secrets with a new volume type. The secrets volume
-will be backed by a volume plugin that does the actual work of fetching
-the secret and placing it on the filesystem to be mounted in the container. It
-should be possible to mount single files as part of a secret. Secrets may
-consist of multiple files. For example, an SSH key pair. In order to remove the
-burden from the end user in specifying every file that a secret consists of, it should be possible to mount all files provided by a secret with a single ```VolumeMount``` entry in the container specification.
+
+This design proposes mounting secrets with a new volume type. The secrets volume will be backed
+by a volume plugin that does the actual work of fetching the secret and placing it on the
+filesystem to be mounted in the container. It should be possible to mount single files as part of a
+secret. Secrets may consist of multiple files. For example, an SSH key pair. In order to remove the
+burden from the end user in specifying every file that a secret consists of, it should be possible
+to mount all files provided by a secret with a single ```VolumeMount``` entry in the container
+specification.
 
 ### Secret Volume Source
 
@@ -75,12 +87,19 @@ type SecretFile struct {
 ```
 
 ### Secret Volume Plugin
-The secret volume plugin would implement the actual retrieval and laying down of
-secrets on the Kubelet's file system. Secrets may be stored in a special secret
-registry, as Docker volumes, LDAP etc. See [Issue #2030](https://github.com/GoogleCloudPlatform/kubernetes/issues/2030) for options. The implementation of this plugin is outside of the scope of this proposal. A default Etcd-based version could be provided out of the box, but different solutions may be appropriate based on the use case for Kubernetes.
+
+The secret volume plugin would implement the actual retrieval and laying down of secrets on the
+Kubelet's file system. Secrets may be stored in a special secret registry, as Docker volumes, LDAP
+etc. See [Issue #2030](https://github.com/GoogleCloudPlatform/kubernetes/issues/2030) for options.
+The implementation of this plugin is outside of the scope of this proposal. A default Etcd-based
+version could be provided out of the box, but different solutions may be appropriate based on the
+use case for Kubernetes.
 
 ### Changes to Support Secret Volumes
-Because secrets require mounting multiple files, the way bind mounts are generated from pods would need to be modified to allow the pod spec to say "I want the default mountpoints" instead of a specific MountPath. This can be done by modifying the VolumeMount struct to include a boolean:
+
+Because secrets require mounting multiple files, the way bind mounts are generated from pods would
+need to be modified to allow the pod spec to say "I want the default mountpoints" instead of a
+specific MountPath. This can be done by modifying the VolumeMount struct to include a boolean:
 
 ```go
 type VolumeMount struct {
