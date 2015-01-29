@@ -22,19 +22,67 @@ access secrets. Secrets should be placed where the container expects them to be.
 
 ## Use Cases
 
-1.  As a cluster operator, I want to allow a pod to access the Kubernetes master using a custom
-    .kubeconfig, so that I can securely reach the master
-2.  As a cluster operator, I want to allow a pod to access the DockerHub using credentials from a
-    .dockercfg file, so that pods can push images to the DockerHub
-3.  As a cluster operator, I want to allow a pod to access a GitHub repository using SSH keys, so
-    that I can push and fetch to and from the repository
-4.  As a user, I want to allow pods to consume supplemental information about services such as
+1.  As a user, I want to store secret artifacts for my applications and consume them securely in
+    pods, so that I can keep the configuration for my applications separate from the images that
+    use them:
+    1.  As a cluster operator, I want to allow a pod to access the Kubernetes master using a custom
+        .kubeconfig, so that I can securely reach the master
+    2.  As a cluster operator, I want to allow a pod to access the DockerHub using credentials from a
+        .dockercfg file, so that pods can push images to the DockerHub
+    3.  As a cluster operator, I want to allow a pod to access a GitHub repository using SSH keys, so
+        that I can push and fetch to and from the repository
+2.  As a user, I want to allow pods to consume supplemental information about services such as
     username and password which should be kept secret, so that I can share secrets about a service
     amongst the pods in my application securely
-5.  As a user, I want to store secret configuration artifacts for my applications and consume
-    them securely in pods, so that I can keep the configuration for my applications separate from
-    the images that use them.
 
+### Use-Case: Configuration artifacts
+
+Many configuration files contain secrets intermixed with another configuration information.  For
+example, a user's application may contain a properties file than contains database credentials,
+SaaS API tokens, etc.  Users should be able to consume configuration artifacts in their pods and
+be able to control the path on the containers filesystem where the artifact will be presented.
+
+### Use-Case: Metadata about services
+
+Most pieces of information about how to use a service are secrets.  For example, a service that
+provides a mysql database needs to provide the username, password, and database name to consumers
+so that they can authenticate and use the correct database. Pods consuming the mysql service would
+also consume the secrets associated with the mysql service.
+
+## Consuming secrets as environment variables
+
+Some images will expect to receive configuration items as environment variables instead of files.
+We should consider what the best way to allow this is; there are a few different options:
+
+1.  Force the user to adapt files into environment variables.  Users can store secrets that need to
+    be presented as environment variables in a format that is easy to consume from a shell:
+
+        $ cat /etc/secrets/my-secret.txt
+        export MY_SECRET_ENV=MY_SECRET_VALUE
+
+    The user could `source` the file at `/etc/secrets/my-secret` prior to executing the command for
+    the image either inline in the command or in an init script, 
+
+2.  Give secrets an attribute that allows users to express the intent that the platform should
+    generate the above syntax in the file used to present a secret.  The user could consume these
+    files in the same manner as the above option.
+
+3.  Give secrets attributes that allow the user to express that the secret should be presented to
+    the container as an environment variable.  The container's environment would contain the
+    desired values and the software in the container could use them without accomodation the
+    command or setup script.
+
+**TODO**: Detailed assessment of the above options
+
+## Analysis TODOs
+
+Collecting remaining TODOs here:
+
+1.  Describe the lifecycle of secrets
+2.  Determine how/whether secrets interact with service accounts; are namespaces enough for the
+    security scope? Can/should my security context affect what secrets I have access to?
+3.  How will pods know when secret values change?  Should there be a way to express that a pod
+    which consumes a secret should be restarted when the secret changes?
 
 ## Proposed Design
 
@@ -119,6 +167,7 @@ type VolumeMount struct {
 ```
 
 and the volume Builder interface to return a bind string instead of just a path:
+
 ```go
 type Interface interface {
 	GetPath() string
@@ -129,4 +178,10 @@ type Interface interface {
 ```
 
 ### Security Concerns
-This proposal requires that secrets be placed on a filesystem location that is accessible to the container requiring the secret. This makes it vulnerable to attacks on the container and the node, especially if the secret is placed in plain text. MCS labels can mitigate some of this risk. However if there is a particular use case for a very sensitive secret, the secret itself could be stored encrypted and placed in encrypted form in the file system for the container. The container would have to know how to decrypt it.
+
+This proposal requires that secrets be placed on a filesystem location that is accessible to the
+container requiring the secret. This makes it vulnerable to attacks on the container and the node,
+especially if the secret is placed in plain text. MCS labels can mitigate some of this risk.
+However if there is a particular use case for a very sensitive secret, the secret itself could be
+stored encrypted and placed in encrypted form in the file system for the container. The container
+would have to know how to decrypt it.
