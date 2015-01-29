@@ -22,13 +22,18 @@ access secrets. Secrets should be placed where the container expects them to be.
 
 ## Use Cases
 
-1. As a cluster operator, I want to allow a pod to access the Kubernetes master using a custom
-   .kubeconfig, so that I can securely reach the master
-2. As a cluster operator, I want to allow a pod to access the DockerHub using credentials from a
-   .dockercfg file, so that pods can push images to the DockerHub
-3. As a cluster operator, I want to allow a pod to access a GitHub repository using SSH keys, so
-   that I can push and fetch to and from the repository
-4. Access a super secret service using a set of keys
+1.  As a cluster operator, I want to allow a pod to access the Kubernetes master using a custom
+    .kubeconfig, so that I can securely reach the master
+2.  As a cluster operator, I want to allow a pod to access the DockerHub using credentials from a
+    .dockercfg file, so that pods can push images to the DockerHub
+3.  As a cluster operator, I want to allow a pod to access a GitHub repository using SSH keys, so
+    that I can push and fetch to and from the repository
+4.  As a user, I want to allow pods to consume supplemental information about services such as
+    username and password which should be kept secret, so that I can share secrets about a service
+    amongst the pods in my application securely
+5.  As a user, I want to store secret configuration artifacts for my applications and consume
+    them securely in pods, so that I can keep the configuration for my applications separate from
+    the images that use them.
 
 
 ## Proposed Design
