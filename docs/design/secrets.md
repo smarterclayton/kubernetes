@@ -15,41 +15,45 @@ access secrets. Secrets should be placed where the container expects them to be.
 
 ## Constraints and Assumptions
 
-* This design does not prescribe a method for storing/transmitting secrets
-* Encryption and node security are orthogonal concerns
-* It is assumed that node and master are secure and that compromising their security could also
-  compromise secrets.
+*  This design does not prescribe a method for storing/transmitting secrets
+*  Encryption and node security are orthogonal concerns
+*  It is assumed that node and master are secure and that compromising their security could also
+   compromise secrets:
+   *  If a node is compromised, only the secrets for the containers scheduled on it should be
+      exposed
+   *  If the master is compromised, all secrets in the cluster may be exposed
+*  This design does not proscribe a method for rotating secrets in use in containers
 
 ## Use Cases
 
 1.  As a user, I want to store secret artifacts for my applications and consume them securely in
-    pods, so that I can keep the configuration for my applications separate from the images that
-    use them:
+    containers, so that I can keep the configuration for my applications separate from the images
+    that use them:
     1.  As a cluster operator, I want to allow a pod to access the Kubernetes master using a custom
-        .kubeconfig, so that I can securely reach the master
-    2.  As a cluster operator, I want to allow a pod to access the DockerHub using credentials from a
-        .dockercfg file, so that pods can push images to the DockerHub
-    3.  As a cluster operator, I want to allow a pod to access a GitHub repository using SSH keys, so
-        that I can push and fetch to and from the repository
-2.  As a user, I want to allow pods to consume supplemental information about services such as
-    username and password which should be kept secret, so that I can share secrets about a service
-    amongst the pods in my application securely
+        `.kubeconfig` file, so that I can securely reach the master
+    2.  As a cluster operator, I want to allow a pod to access the DockerHub using credentials from
+        a `.dockercfg` file, so that containers can push images to the DockerHub
+    3.  As a cluster operator, I want to allow a pod to access a GitHub repository using SSH keys,
+        so that I can push and fetch to and from the repository
+2.  As a user, I want to allow containers to consume supplemental information about services such
+    as username and password which should be kept secret, so that I can share secrets about a
+    service amongst the containers in my application securely
 
 ### Use-Case: Configuration artifacts
 
 Many configuration files contain secrets intermixed with another configuration information.  For
 example, a user's application may contain a properties file than contains database credentials,
-SaaS API tokens, etc.  Users should be able to consume configuration artifacts in their pods and
+SaaS API tokens, etc.  Users should be able to consume configuration artifacts in their containers and
 be able to control the path on the containers filesystem where the artifact will be presented.
 
 ### Use-Case: Metadata about services
 
 Most pieces of information about how to use a service are secrets.  For example, a service that
 provides a mysql database needs to provide the username, password, and database name to consumers
-so that they can authenticate and use the correct database. Pods consuming the mysql service would
-also consume the secrets associated with the mysql service.
+so that they can authenticate and use the correct database. Containers in pods consuming the mysql
+service would also consume the secrets associated with the mysql service.
 
-## Consuming secrets as environment variables
+## Deferral: Consuming secrets as environment variables
 
 Some images will expect to receive configuration items as environment variables instead of files.
 We should consider what the best way to allow this is; there are a few different options:
@@ -72,7 +76,8 @@ We should consider what the best way to allow this is; there are a few different
     desired values and the software in the container could use them without accomodation the
     command or setup script.
 
-**TODO**: Detailed assessment of the above options
+For our initial work, we will treat all secrets as files to narrow the problem space.  There will
+be a future proposal that handles exposing secrets as environment variables.
 
 ## Analysis TODOs
 
@@ -81,8 +86,8 @@ Collecting remaining TODOs here:
 1.  Describe the lifecycle of secrets
 2.  Determine how/whether secrets interact with service accounts; are namespaces enough for the
     security scope? Can/should my security context affect what secrets I have access to?
-3.  How will pods know when secret values change?  Should there be a way to express that a pod
-    which consumes a secret should be restarted when the secret changes?
+3.  How will containers know when secret values change?  Should there be a way to express that a
+    container which consumes a secret should be restarted when the secret changes?
 
 ## Proposed Design
 
@@ -96,6 +101,14 @@ burden from the end user in specifying every file that a secret consists of, it 
 to mount all files provided by a secret with a single ```VolumeMount``` entry in the container
 specification.
 
+### Community work:
+
+There are several proposals / upstream patches that we should consider:
+
+1.  [Docker vault proposal](https://github.com/docker/docker/issues/10310)
+2.  [Specification for image/container standardization based on volumes](https://github.com/docker/docker/issues/9277)
+3.  [Kubernetes service account proposal](https://github.com/GoogleCloudPlatform/kubernetes/pull/2297)
+
 ### Secret Volume Source
 
 A new Secret type of volume source will be added to the ```VolumeSource``` struct in the API:
@@ -103,12 +116,12 @@ A new Secret type of volume source will be added to the ```VolumeSource``` struc
 ```go
 type VolumeSource struct {
      ... 
-     Secret *Secret `json:"secret"`
+     SecretSource *SecretSource `json:"secret"`
 }
 
-type Secret struct {
-     // Ref is a reference to the actual secret
-     Ref string 
+type SecretSource struct {
+     // Assumption: secrets will be accessible via a Kubernetes resource
+     Target ObjectReference
      
      // Files is a set of descriptors of where and how the secret files
      // should be placed (optional). If not specified, the secret itself
@@ -121,22 +134,15 @@ type SecretFile struct {
      // of SSH keys, you would have a 'private' and a 'public' key
 	 Name string
 	 
-	 // Path of the secret within the container
+	 // Path of the secret file within the container
 	 Path string
-	 
-	 // Owner id of the file owner
-	 OwnerUID int
-	 
-	 // Group id of the file group
-	 GroupUID int
-	 
-	 // File Mode
-	 Mode os.FileMode
-	 
-	 // MCSLabel for SELinux
-	 MCSLabel string
-}
 
+     // Security context of the secret
+     SecurityContext SecurityContext
+     
+     // File Mode
+     Mode os.FileMode     
+}
 ```
 
 ### Secret Volume Plugin
@@ -184,4 +190,4 @@ container requiring the secret. This makes it vulnerable to attacks on the conta
 especially if the secret is placed in plain text. MCS labels can mitigate some of this risk.
 However if there is a particular use case for a very sensitive secret, the secret itself could be
 stored encrypted and placed in encrypted form in the file system for the container. The container
-would have to know how to decrypt it.
+would have to know how to decrypt it and would receive the decryption key via another channel.
