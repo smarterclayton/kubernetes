@@ -131,11 +131,10 @@ Collecting remaining TODOs here:
 
 This design proposes a new `Secret` resource which is mounted into containers with a new volume
 type. The secrets volume will be backed by a volume plugin that does the actual work of fetching
-the secret and placing it on the filesystem to be mounted in the container. It should be possible
-to mount single files as part of a secret. Secrets may consist of multiple files. For example, an
-SSH key pair. In order to remove the burden from the end user in specifying every file that a
-secret consists of, it should be possible to mount all files provided by a secret with a single
-```VolumeMount``` entry in the container specification.
+the secret and placing it on the filesystem to be mounted in the container. Secrets may consist
+of multiple files. For example, an SSH key pair. In order to remove the burden from the end user
+in specifying every file that a secret consists of, it should be possible to mount all files
+provided by a secret with a single ```VolumeMount``` entry in the container specification.
 
 ### Secret API Resource
 
@@ -146,6 +145,8 @@ type Secret struct {
     TypeMeta
     ObjectMeta
 
+    // Keys in this map are the paths relative to the volume
+    // presented to a container for this secret data.
     Data map[string][]byte
 }
 ```
@@ -162,30 +163,15 @@ API:
 
 ```go
 type VolumeSource struct {
-     ... 
-     SecretSource *SecretSource `json:"secret"`
+    // Other fields omitted
+
+    // SecretSource represents a secret that should be presented in a volume
+    SecretSource *SecretSource `json:"secret"`
 }
 
 type SecretSource struct {
-     Target ObjectReference
-     
-     // Files is a set of adapters that determine where a secret's data should
-     // be placed on the container's filesystem
-	 Files []SecretFile
-}
 
-type SecretFile struct {
-     // Name of the key of the data within the secret
-	 Name string
-	 
-	 // Path of the secret file within the container
-	 Path string
-
-     // Security context of the secret
-     SecurityContext SecurityContext
-     
-     // File Mode
-     Mode os.FileMode     
+    Target ObjectReference
 }
 ```
 
@@ -195,37 +181,8 @@ The secret volume plugin would implement the actual retrieval and laying down of
 Kubelet's file system. Secrets may be stored in a special secret registry, as Docker volumes, LDAP
 etc. See [Issue #2030](https://github.com/GoogleCloudPlatform/kubernetes/issues/2030) for options.
 The implementation of this plugin is outside of the scope of this proposal. A default Etcd-based
-version could be provided out of the box, but different solutions may be appropriate based on the
-use case for Kubernetes.
-
-### Changes to Support Secret Volumes
-
-Because secrets require mounting multiple files, the way bind mounts are generated from pods would
-need to be modified to allow the pod spec to say "I want the default mountpoints" instead of a
-specific MountPath. This can be done by modifying the VolumeMount struct to include a boolean:
-
-```go
-type VolumeMount struct {
-	Name string
-	ReadOnly bool
-	MountPath string // Change from required to optional
-	
-	// New boolean to let the Kubelet know we want the default path
-	// from the volume
-	DefaultPath bool 
-} 
-```
-
-and the volume Builder interface to return a bind string instead of just a path:
-
-```go
-type Interface interface {
-	GetPath() string
-	
-	// Returns a <container_path>:<host_path> string
-	GetBind() string
-}
-```
+version will be provided out of the box, but different solutions may be appropriate based on
+specific user use-cases.
 
 ### Security Concerns
 
