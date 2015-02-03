@@ -31,9 +31,9 @@ access secrets. Secrets should be placed where the container expects them to be.
     that use them:
     1.  As a cluster operator, I want to allow a pod to access the Kubernetes master using a custom
         `.kubeconfig` file, so that I can securely reach the master
-    2.  As a cluster operator, I want to allow a pod to access the DockerHub using credentials from
-        a `.dockercfg` file, so that containers can push images to the DockerHub
-    3.  As a cluster operator, I want to allow a pod to access a GitHub repository using SSH keys,
+    2.  As a cluster operator, I want to allow a pod to access a Docker registry using credentials
+        from a `.dockercfg` file, so that containers can push images
+    3.  As a cluster operator, I want to allow a pod to access a git repository using SSH keys,
         so that I can push and fetch to and from the repository
 2.  As a user, I want to allow containers to consume supplemental information about services such
     as username and password which should be kept secret, so that I can share secrets about a
@@ -41,17 +41,17 @@ access secrets. Secrets should be placed where the container expects them to be.
 
 ### Use-Case: Configuration artifacts
 
-Many configuration files contain secrets intermixed with another configuration information.  For
+Many configuration files contain secrets intermixed with other configuration information.  For
 example, a user's application may contain a properties file than contains database credentials,
 SaaS API tokens, etc.  Users should be able to consume configuration artifacts in their containers and
-be able to control the path on the containers filesystem where the artifact will be presented.
+be able to control the path on the container's filesystems where the artifact will be presented.
 
 ### Use-Case: Metadata about services
 
 Most pieces of information about how to use a service are secrets.  For example, a service that
-provides a mysql database needs to provide the username, password, and database name to consumers
-so that they can authenticate and use the correct database. Containers in pods consuming the mysql
-service would also consume the secrets associated with the mysql service.
+provides a MySQL database needs to provide the username, password, and database name to consumers
+so that they can authenticate and use the correct database. Containers in pods consuming the MySQL
+service would also consume the secrets associated with the MySQL service.
 
 ## Deferral: Consuming secrets as environment variables
 
@@ -168,15 +168,13 @@ type VolumeSource struct {
 type SecretSource struct {
      Target ObjectReference
      
-     // Files is a set of descriptors of where and how the secret files
-     // should be placed (optional). If not specified, the secret itself
-     // will determine where its files should go
+     // Files is a set of adapters that determine where a secret's data should
+     // be placed on the container's filesystem
 	 Files []SecretFile
 }
 
 type SecretFile struct {
-     // Name of the file within the secret. For example, in the case
-     // of SSH keys, you would have a 'private' and a 'public' key
+     // Name of the key of the data within the secret
 	 Name string
 	 
 	 // Path of the secret file within the container
