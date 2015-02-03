@@ -101,6 +101,7 @@ The use-case where the kubelet reads secrets has several additional requirements
     node
 2.  Kubelets should have read-only access to secret data
 3.  Secret data should not be transmitted over the wire insecurely
+4.  Kubelets must ensure pods do not have access to each other's secrets
 
 TODO: describe further; what are the interface / watch implications?
 
