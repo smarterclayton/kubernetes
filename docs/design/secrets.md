@@ -79,15 +79,50 @@ We should consider what the best way to allow this is; there are a few different
 For our initial work, we will treat all secrets as files to narrow the problem space.  There will
 be a future proposal that handles exposing secrets as environment variables.
 
+## Flow analysis of secret data
+
+There are two fundamentally different use-cases for access to secrets:
+
+1.  CRUD operations on secrets by their owners
+2.  Read-only access to the secrets needed for a particular node by the kubelet
+
+### Use-Case: CRUD operations by owners
+
+In use cases for CRUD operations, the user experience for secrets should be no different than for
+other API resources.
+
+TODO: document possible relation with Service Accounts
+
+### Use-Case: Kubelet read of secrets for node
+
+The use-case where the kubelet reads secrets has several additional requirements:
+
+1.  Kubelets should only receive secret data which is required by pods scheduled onto the kubelet's
+    node
+2.  Kubelets should have read-only access to secret data
+3.  Secret data should not be transmitted over the wire insecurely
+
+TODO: describe further; what are the interface / watch implications?
+
+## Community work:
+
+There are several proposals / upstream patches that we should consider:
+
+1.  [Docker vault proposal](https://github.com/docker/docker/issues/10310)
+2.  [Specification for image/container standardization based on volumes](https://github.com/docker/docker/issues/9277)
+3.  [Kubernetes service account proposal](https://github.com/GoogleCloudPlatform/kubernetes/pull/2297)
+4.  [Secret proposal for docker](https://github.com/docker/docker/pull/6075)
+5.  [Continuating of secret proposal for docker](https://github.com/docker/docker/pull/6697)
+
 ## Analysis TODOs
 
 Collecting remaining TODOs here:
 
-1.  Describe the lifecycle of secrets
-2.  Determine how/whether secrets interact with service accounts; are namespaces enough for the
-    security scope? Can/should my security context affect what secrets I have access to?
-3.  How will containers know when secret values change?  Should there be a way to express that a
-    container which consumes a secret should be restarted when the secret changes?
+1.  Determine how/whether secrets interact with service accounts; are namespaces enough for the
+    security scope?
+2.  Can/should my security context affect what secrets I have access to?
+3.  Should there be a way to express that a container which consumes a secret should be restarted
+    when the secret changes?
 
 ## Proposed Design
 
@@ -100,16 +135,6 @@ to mount single files as part of a secret. Secrets may consist of multiple files
 SSH key pair. In order to remove the burden from the end user in specifying every file that a
 secret consists of, it should be possible to mount all files provided by a secret with a single
 ```VolumeMount``` entry in the container specification.
-
-### Community work:
-
-There are several proposals / upstream patches that we should consider:
-
-1.  [Docker vault proposal](https://github.com/docker/docker/issues/10310)
-2.  [Specification for image/container standardization based on volumes](https://github.com/docker/docker/issues/9277)
-3.  [Kubernetes service account proposal](https://github.com/GoogleCloudPlatform/kubernetes/pull/2297)
-4.  [Secret proposal for docker](https://github.com/docker/docker/pull/6075)
-5.  [Continuating of secret proposal for docker](https://github.com/docker/docker/pull/6697)
 
 ### Secret API Resource
 
