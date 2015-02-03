@@ -15,14 +15,14 @@ access secrets. Secrets should be placed where the container expects them to be.
 
 ## Constraints and Assumptions
 
-*  This design does not prescribe a method for storing/transmitting secrets
-*  Encryption and node security are orthogonal concerns
+*  This design does not prescribe a method for storing secrets; storage of secrets should be
+   pluggable to accomodate different use-cases
+*  Encryption of secret data and node security are orthogonal concerns
 *  It is assumed that node and master are secure and that compromising their security could also
    compromise secrets:
    *  If a node is compromised, only the secrets for the containers scheduled on it should be
       exposed
    *  If the master is compromised, all secrets in the cluster may be exposed
-*  This design does not proscribe a method for rotating secrets in use in containers
 
 ## Use Cases
 
@@ -93,13 +93,13 @@ Collecting remaining TODOs here:
 
 ### Overview
 
-This design proposes mounting secrets with a new volume type. The secrets volume will be backed
-by a volume plugin that does the actual work of fetching the secret and placing it on the
-filesystem to be mounted in the container. It should be possible to mount single files as part of a
-secret. Secrets may consist of multiple files. For example, an SSH key pair. In order to remove the
-burden from the end user in specifying every file that a secret consists of, it should be possible
-to mount all files provided by a secret with a single ```VolumeMount``` entry in the container
-specification.
+This design proposes a new `Secret` resource which is mounted into containers with a new volume
+type. The secrets volume will be backed by a volume plugin that does the actual work of fetching
+the secret and placing it on the filesystem to be mounted in the container. It should be possible
+to mount single files as part of a secret. Secrets may consist of multiple files. For example, an
+SSH key pair. In order to remove the burden from the end user in specifying every file that a
+secret consists of, it should be possible to mount all files provided by a secret with a single
+```VolumeMount``` entry in the container specification.
 
 ### Community work:
 
@@ -108,10 +108,31 @@ There are several proposals / upstream patches that we should consider:
 1.  [Docker vault proposal](https://github.com/docker/docker/issues/10310)
 2.  [Specification for image/container standardization based on volumes](https://github.com/docker/docker/issues/9277)
 3.  [Kubernetes service account proposal](https://github.com/GoogleCloudPlatform/kubernetes/pull/2297)
+4.  [Secret proposal for docker](https://github.com/docker/docker/pull/6075)
+5.  [Continuating of secret proposal for docker](https://github.com/docker/docker/pull/6697)
+
+### Secret API Resource
+
+A new resource for secrets will be added to the API:
+
+```go
+type Secret struct {
+    TypeMeta
+    ObjectMeta
+
+    Data map[string][]byte
+}
+```
+
+A new REST API and registry interface will be added to accompany the `Secret` resource.  The
+default implementation of the registry will store `Secret` information in etcd.  Future registry
+implementations could store the `TypeMeta` and `ObjectMeta` fields in etcd and store the secret
+data in another data store entirely, or store the whole object in another data store.
 
 ### Secret Volume Source
 
-A new Secret type of volume source will be added to the ```VolumeSource``` struct in the API:
+A new `SecretSource` type of volume source will be added to the ```VolumeSource``` struct in the
+API:
 
 ```go
 type VolumeSource struct {
@@ -120,7 +141,6 @@ type VolumeSource struct {
 }
 
 type SecretSource struct {
-     // Assumption: secrets will be accessible via a Kubernetes resource
      Target ObjectReference
      
      // Files is a set of descriptors of where and how the secret files
@@ -188,6 +208,6 @@ type Interface interface {
 This proposal requires that secrets be placed on a filesystem location that is accessible to the
 container requiring the secret. This makes it vulnerable to attacks on the container and the node,
 especially if the secret is placed in plain text. MCS labels can mitigate some of this risk.
-However if there is a particular use case for a very sensitive secret, the secret itself could be
+If there is a particular use case for a very sensitive secret, the secret itself could be
 stored encrypted and placed in encrypted form in the file system for the container. The container
 would have to know how to decrypt it and would receive the decryption key via another channel.
