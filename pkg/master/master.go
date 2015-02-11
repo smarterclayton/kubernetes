@@ -42,7 +42,6 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/master/ports"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/binding"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/controller"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/endpoint"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/etcd"
@@ -52,6 +51,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/minion"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/namespace"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/pod"
+	podetcd "github.com/GoogleCloudPlatform/kubernetes/pkg/registry/pod/etcd"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/resourcequota"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/resourcequotausage"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/service"
@@ -114,16 +114,15 @@ type Config struct {
 // Master contains state for a Kubernetes cluster master/api server.
 type Master struct {
 	// "Inputs", Copied from Config
-	podRegistry           pod.Registry
 	controllerRegistry    controller.Registry
 	serviceRegistry       service.Registry
 	endpointRegistry      endpoint.Registry
 	minionRegistry        minion.Registry
-	bindingRegistry       binding.Registry
 	eventRegistry         generic.Registry
 	limitRangeRegistry    generic.Registry
 	resourceQuotaRegistry resourcequota.Registry
 	namespaceRegistry     generic.Registry
+	boundPodFactory       pod.BoundPodFactory
 	storage               map[string]apiserver.RESTStorage
 	client                *client.Client
 	portalNet             *net.IPNet
@@ -275,16 +274,15 @@ func New(c *Config) *Master {
 	glog.Infof("Setting master service IPs based on PortalNet subnet to %q (read-only) and %q (read-write).", serviceReadOnlyIP, serviceReadWriteIP)
 
 	m := &Master{
-		podRegistry:           etcd.NewRegistry(c.EtcdHelper, boundPodFactory),
 		controllerRegistry:    etcd.NewRegistry(c.EtcdHelper, nil),
 		serviceRegistry:       serviceRegistry,
 		endpointRegistry:      etcd.NewRegistry(c.EtcdHelper, nil),
-		bindingRegistry:       etcd.NewRegistry(c.EtcdHelper, boundPodFactory),
 		eventRegistry:         event.NewEtcdRegistry(c.EtcdHelper, uint64(c.EventTTL.Seconds())),
 		namespaceRegistry:     namespace.NewEtcdRegistry(c.EtcdHelper),
 		minionRegistry:        minionRegistry,
 		limitRangeRegistry:    limitrange.NewEtcdRegistry(c.EtcdHelper),
 		resourceQuotaRegistry: resourcequota.NewEtcdRegistry(c.EtcdHelper),
+		boundPodFactory:       boundPodFactory,
 		client:                c.Client,
 		portalNet:             c.PortalNet,
 		rootWebService:        new(restful.WebService),
@@ -375,30 +373,32 @@ func (m *Master) init(c *Config) {
 	var userContexts = handlers.NewUserRequestContext()
 	var authenticator = c.Authenticator
 
+	podStorage, bindingStorage := podetcd.NewREST(c.EtcdHelper, m.boundPodFactory)
+	podRegistry := pod.NewRegistry(podStorage)
+
 	nodeRESTStorage := minion.NewREST(m.minionRegistry)
 	podCache := NewPodCache(
 		c.KubeletClient,
 		RESTStorageToNodes(nodeRESTStorage).Nodes(),
-		m.podRegistry,
+		podRegistry,
 	)
 	go util.Forever(func() { podCache.UpdateAllContainers() }, m.cacheTimeout)
 	go util.Forever(func() { podCache.GarbageCollectPodStatus() }, time.Minute*30)
 
+	// TODO: refactor podCache to sit on top of podStorage via status calls
+	podStorage = podStorage.WithPodStatus(podCache)
+
 	// TODO: Factor out the core API registration
 	m.storage = map[string]apiserver.RESTStorage{
-		"pods": pod.NewREST(&pod.RESTConfig{
-			PodCache: podCache,
-			Registry: m.podRegistry,
-		}),
-		"replicationControllers": controller.NewREST(m.controllerRegistry, m.podRegistry),
+		"pods":     podStorage,
+		"bindings": bindingStorage,
+
+		"replicationControllers": controller.NewREST(m.controllerRegistry, podRegistry),
 		"services":               service.NewREST(m.serviceRegistry, c.Cloud, m.minionRegistry, m.portalNet),
 		"endpoints":              endpoint.NewREST(m.endpointRegistry),
 		"minions":                nodeRESTStorage,
 		"nodes":                  nodeRESTStorage,
 		"events":                 event.NewREST(m.eventRegistry),
-
-		// TODO: should appear only in scheduler API group.
-		"bindings": binding.NewREST(m.bindingRegistry),
 
 		"limitRanges":         limitrange.NewREST(m.limitRangeRegistry),
 		"resourceQuotas":      resourcequota.NewREST(m.resourceQuotaRegistry),
