@@ -84,13 +84,7 @@ func (q *UniqueQueue) Remove(value string) bool {
 	q.set.Delete(value)
 	for i, val := range q.queue {
 		if val.Value == value {
-			if i > 0 && i < len(q.queue)-1 {
-				q.queue = append(q.queue[0:i], q.queue[i+1:len(q.queue)]...)
-			} else if i > 0 {
-				q.queue = q.queue[0 : len(q.queue)-1]
-			} else {
-				q.queue = q.queue[1:len(q.queue)]
-			}
+			heap.Remove(&q.queue, i)
 			return true
 		}
 	}
@@ -104,7 +98,7 @@ func (q *UniqueQueue) Get() (TimedValue, bool) {
 	if len(q.queue) == 0 {
 		return TimedValue{}, false
 	}
-	result := q.queue.Pop().(*TimedValue)
+	result := heap.Pop(&q.queue).(*TimedValue)
 	q.set.Delete(result.Value)
 	return *result, true
 }
