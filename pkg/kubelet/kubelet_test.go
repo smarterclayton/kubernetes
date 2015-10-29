@@ -1486,6 +1486,27 @@ func TestMakeEnvironmentVariables(t *testing.T) {
 	}
 }
 
+func waitingState(cName string) api.ContainerStatus {
+	return api.ContainerStatus{
+		Name: cName,
+		State: api.ContainerState{
+			Waiting: &api.ContainerStateWaiting{},
+		},
+	}
+}
+func waitingStateWithLastTermination(cName string) api.ContainerStatus {
+	return api.ContainerStatus{
+		Name: cName,
+		State: api.ContainerState{
+			Waiting: &api.ContainerStateWaiting{},
+		},
+		LastTerminationState: api.ContainerState{
+			Terminated: &api.ContainerStateTerminated{
+				ExitCode: 0,
+			},
+		},
+	}
+}
 func runningState(cName string) api.ContainerStatus {
 	return api.ContainerStatus{
 		Name: cName,
@@ -1590,6 +1611,32 @@ func TestPodPhaseWithRestartAlways(t *testing.T) {
 			api.PodPending,
 			"mixed state #2 with restart always",
 		},
+		{
+			&api.Pod{
+				Spec: desiredState,
+				Status: api.PodStatus{
+					ContainerStatuses: []api.ContainerStatus{
+						runningState("containerA"),
+						waitingState("containerB"),
+					},
+				},
+			},
+			api.PodPending,
+			"mixed state #3 with restart always",
+		},
+		{
+			&api.Pod{
+				Spec: desiredState,
+				Status: api.PodStatus{
+					ContainerStatuses: []api.ContainerStatus{
+						runningState("containerA"),
+						waitingStateWithLastTermination("containerB"),
+					},
+				},
+			},
+			api.PodRunning,
+			"backoff crashloop container with restart always",
+		},
 	}
 	for _, test := range tests {
 		if status := GetPhase(&test.pod.Spec, test.pod.Status.ContainerStatuses); status != test.status {
@@ -1678,6 +1725,19 @@ func TestPodPhaseWithRestartNever(t *testing.T) {
 			api.PodPending,
 			"mixed state #2 with restart never",
 		},
+		{
+			&api.Pod{
+				Spec: desiredState,
+				Status: api.PodStatus{
+					ContainerStatuses: []api.ContainerStatus{
+						runningState("containerA"),
+						waitingState("containerB"),
+					},
+				},
+			},
+			api.PodPending,
+			"mixed state #3 with restart never",
+		},
 	}
 	for _, test := range tests {
 		if status := GetPhase(&test.pod.Spec, test.pod.Status.ContainerStatuses); status != test.status {
@@ -1765,6 +1825,32 @@ func TestPodPhaseWithRestartOnFailure(t *testing.T) {
 			},
 			api.PodPending,
 			"mixed state #2 with restart onfailure",
+		},
+		{
+			&api.Pod{
+				Spec: desiredState,
+				Status: api.PodStatus{
+					ContainerStatuses: []api.ContainerStatus{
+						runningState("containerA"),
+						waitingState("containerB"),
+					},
+				},
+			},
+			api.PodPending,
+			"mixed state #3 with restart onfailure",
+		},
+		{
+			&api.Pod{
+				Spec: desiredState,
+				Status: api.PodStatus{
+					ContainerStatuses: []api.ContainerStatus{
+						runningState("containerA"),
+						waitingStateWithLastTermination("containerB"),
+					},
+				},
+			},
+			api.PodRunning,
+			"backoff crashloop container with restart onfailure",
 		},
 	}
 	for _, test := range tests {
