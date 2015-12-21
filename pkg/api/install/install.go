@@ -25,13 +25,12 @@ import (
 
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/latest"
-	"k8s.io/kubernetes/pkg/api/registered"
-	"k8s.io/kubernetes/pkg/util/sets"
-
 	"k8s.io/kubernetes/pkg/api/meta"
+	"k8s.io/kubernetes/pkg/api/registered"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/runtime"
+	"k8s.io/kubernetes/pkg/util/sets"
 )
 
 const importPrefix = "k8s.io/kubernetes/pkg/api"
@@ -73,7 +72,6 @@ func enableVersions(externalVersions []unversioned.GroupVersion) error {
 	groupMeta := latest.GroupMeta{
 		GroupVersion:  preferredExternalVersion,
 		GroupVersions: externalVersions,
-		Codec:         runtime.CodecFor(api.Scheme, preferredExternalVersion),
 		RESTMapper:    newRESTMapper(externalVersions),
 		SelfLinker:    runtime.SelfLinker(accessor),
 		InterfacesFor: interfacesFor,
@@ -130,7 +128,6 @@ func interfacesFor(version unversioned.GroupVersion) (*meta.VersionInterfaces, e
 	switch version {
 	case v1.SchemeGroupVersion:
 		return &meta.VersionInterfaces{
-			Codec:            v1.Codec,
 			ObjectConvertor:  api.Scheme,
 			MetadataAccessor: accessor,
 		}, nil
