@@ -63,7 +63,7 @@ func TestUnschedulableNodes(t *testing.T) {
 	masterConfig := framework.NewIntegrationTestMasterConfig()
 	m = master.New(masterConfig)
 
-	restClient := client.NewOrDie(&client.Config{Host: s.URL, GroupVersion: testapi.Default.GroupVersion()})
+	restClient := client.NewOrDie(&client.Config{Host: s.URL, ContentConfig: client.ContentConfig{GroupVersion: testapi.Default.GroupVersion()}})
 
 	schedulerConfigFactory := factory.NewConfigFactory(restClient, nil, api.DefaultSchedulerName)
 	schedulerConfig, err := schedulerConfigFactory.Create()
@@ -305,7 +305,7 @@ func TestMultiScheduler(t *testing.T) {
 			- testPodNoAnnotation2 and testPodWithAnnotationFitsDefault2 shoule NOT be scheduled
 	*/
 	// 1. create and start default-scheduler
-	restClient := client.NewOrDie(&client.Config{Host: s.URL, GroupVersion: testapi.Default.GroupVersion()})
+	restClient := client.NewOrDie(&client.Config{Host: s.URL, ContentConfig: client.ContentConfig{GroupVersion: testapi.Default.GroupVersion()}})
 
 	schedulerConfigFactory := factory.NewConfigFactory(restClient, nil, api.DefaultSchedulerName)
 	schedulerConfig, err := schedulerConfigFactory.Create()
@@ -376,7 +376,7 @@ func TestMultiScheduler(t *testing.T) {
 	}
 
 	// 5. create and start a scheduler with name "foo-scheduler"
-	restClient2 := client.NewOrDie(&client.Config{Host: s.URL, GroupVersion: testapi.Default.GroupVersion()})
+	restClient2 := client.NewOrDie(&client.Config{Host: s.URL, ContentConfig: client.ContentConfig{GroupVersion: testapi.Default.GroupVersion()}})
 
 	schedulerConfigFactory2 := factory.NewConfigFactory(restClient2, nil, "foo-scheduler")
 	schedulerConfig2, err := schedulerConfigFactory2.Create()

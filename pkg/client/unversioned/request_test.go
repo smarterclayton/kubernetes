@@ -44,10 +44,21 @@ import (
 	watchjson "k8s.io/kubernetes/pkg/watch/json"
 )
 
+func TestNewRequestSetsAccept(t *testing.T) {
+	r := NewRequest(nil, "get", &url.URL{Path: "/path/"}, ContentConfig{}, nil)
+	if r.headers.Get("Accept") != "" {
+		t.Errorf("unexpected headers: %#v", r.headers)
+	}
+	r = NewRequest(nil, "get", &url.URL{Path: "/path/"}, ContentConfig{ContentType: "application/other"}, nil)
+	if r.headers.Get("Accept") != "application/other, */*" {
+		t.Errorf("unexpected headers: %#v", r.headers)
+	}
+}
+
 func TestRequestWithErrorWontChange(t *testing.T) {
 	original := Request{
-		err:          errors.New("test"),
-		groupVersion: *testapi.Default.GroupVersion(),
+		err:     errors.New("test"),
+		content: ContentConfig{GroupVersion: testapi.Default.GroupVersion()},
 	}
 	r := original
 	changed := r.Param("foo", "bar").
@@ -178,7 +189,7 @@ func TestRequestParam(t *testing.T) {
 }
 
 func TestRequestVersionedParams(t *testing.T) {
-	r := (&Request{groupVersion: v1.SchemeGroupVersion}).Param("foo", "a")
+	r := (&Request{content: ContentConfig{GroupVersion: &v1.SchemeGroupVersion}}).Param("foo", "a")
 	if !reflect.DeepEqual(r.params, url.Values{"foo": []string{"a"}}) {
 		t.Errorf("should have set a param: %#v", r)
 	}
@@ -194,7 +205,7 @@ func TestRequestVersionedParams(t *testing.T) {
 }
 
 func TestRequestVersionedParamsFromListOptions(t *testing.T) {
-	r := &Request{groupVersion: v1.SchemeGroupVersion}
+	r := &Request{content: ContentConfig{GroupVersion: &v1.SchemeGroupVersion}}
 	r.VersionedParams(&api.ListOptions{ResourceVersion: "1"}, api.Scheme)
 	if !reflect.DeepEqual(r.params, url.Values{
 		"resourceVersion": []string{"1"},
@@ -248,7 +259,7 @@ func TestRequestBody(t *testing.T) {
 	}
 
 	// test unencodable api object
-	r = (&Request{codec: testapi.Default.Codec()}).Body(&NotAnAPIObject{})
+	r = (&Request{content: ContentConfig{Codec: testapi.Default.Codec()}}).Body(&NotAnAPIObject{})
 	if r.err == nil || r.body != nil {
 		t.Errorf("should have set err and left body nil: %#v", r)
 	}
@@ -263,7 +274,7 @@ func TestResultIntoWithErrReturnsErr(t *testing.T) {
 
 func TestURLTemplate(t *testing.T) {
 	uri, _ := url.Parse("http://localhost")
-	r := NewRequest(nil, "POST", uri, unversioned.GroupVersion{Group: "test"}, nil, nil)
+	r := NewRequest(nil, "POST", uri, ContentConfig{GroupVersion: &unversioned.GroupVersion{Group: "test"}}, nil)
 	r.Prefix("pre1").Resource("r1").Namespace("ns").Name("nm").Param("p0", "v0")
 	full := r.URL()
 	if full.String() != "http://localhost/pre1/namespaces/ns/r1/nm?p0=v0" {
@@ -324,7 +335,7 @@ func TestTransformResponse(t *testing.T) {
 		{Response: &http.Response{StatusCode: 200, Body: ioutil.NopCloser(bytes.NewReader(invalid))}, Data: invalid},
 	}
 	for i, test := range testCases {
-		r := NewRequest(nil, "", uri, *testapi.Default.GroupVersion(), testapi.Default.Codec(), nil)
+		r := NewRequest(nil, "", uri, ContentConfig{GroupVersion: testapi.Default.GroupVersion(), Codec: testapi.Default.Codec()}, nil)
 		if test.Response.Body == nil {
 			test.Response.Body = ioutil.NopCloser(bytes.NewReader([]byte{}))
 		}
@@ -411,7 +422,7 @@ func TestTransformUnstructuredError(t *testing.T) {
 
 	for _, testCase := range testCases {
 		r := &Request{
-			codec:        testapi.Default.Codec(),
+			content:      ContentConfig{GroupVersion: testapi.Default.GroupVersion(), Codec: testapi.Default.Codec()},
 			resourceName: testCase.Name,
 			resource:     testCase.Resource,
 		}
@@ -462,7 +473,7 @@ func TestRequestWatch(t *testing.T) {
 		},
 		{
 			Request: &Request{
-				codec: testapi.Default.Codec(),
+				content: ContentConfig{GroupVersion: testapi.Default.GroupVersion(), Codec: testapi.Default.Codec()},
 				client: clientFunc(func(req *http.Request) (*http.Response, error) {
 					return &http.Response{StatusCode: http.StatusForbidden}, nil
 				}),
@@ -475,7 +486,7 @@ func TestRequestWatch(t *testing.T) {
 		},
 		{
 			Request: &Request{
-				codec: testapi.Default.Codec(),
+				content: ContentConfig{GroupVersion: testapi.Default.GroupVersion(), Codec: testapi.Default.Codec()},
 				client: clientFunc(func(req *http.Request) (*http.Response, error) {
 					return &http.Response{StatusCode: http.StatusUnauthorized}, nil
 				}),
@@ -488,7 +499,7 @@ func TestRequestWatch(t *testing.T) {
 		},
 		{
 			Request: &Request{
-				codec: testapi.Default.Codec(),
+				content: ContentConfig{GroupVersion: testapi.Default.GroupVersion(), Codec: testapi.Default.Codec()},
 				client: clientFunc(func(req *http.Request) (*http.Response, error) {
 					return &http.Response{
 						StatusCode: http.StatusUnauthorized,
@@ -600,7 +611,7 @@ func TestRequestStream(t *testing.T) {
 						})))),
 					}, nil
 				}),
-				codec:   testapi.Default.Codec(),
+				content: ContentConfig{Codec: testapi.Default.Codec()},
 				baseURL: &url.URL{},
 			},
 			Err: true,
@@ -1071,7 +1082,7 @@ func TestUintParam(t *testing.T) {
 
 	for _, item := range table {
 		u, _ := url.Parse("http://localhost")
-		r := NewRequest(nil, "GET", u, unversioned.GroupVersion{Group: "test"}, nil, nil).AbsPath("").UintParam(item.name, item.testVal)
+		r := NewRequest(nil, "GET", u, ContentConfig{GroupVersion: &unversioned.GroupVersion{Group: "test"}}, nil).AbsPath("").UintParam(item.name, item.testVal)
 		if e, a := item.expectStr, r.URL().String(); e != a {
 			t.Errorf("expected %v, got %v", e, a)
 		}
@@ -1111,6 +1122,8 @@ func TestBody(t *testing.T) {
 	}
 	f.Close()
 
+	var nilObject *api.DeleteOptions
+	typedObject := interface{}(nilObject)
 	c := testRESTClient(t, nil)
 	tests := []struct {
 		input    interface{}
@@ -1121,11 +1134,26 @@ func TestBody(t *testing.T) {
 		{f.Name(), data, nil},
 		{strings.NewReader(data), data, nil},
 		{obj, string(bodyExpected), map[string]string{"Content-Type": "application/json"}},
+		{typedObject, "", nil},
 	}
 	for i, tt := range tests {
 		r := c.Post().Body(tt.input)
 		if r.err != nil {
 			t.Errorf("%d: r.Body(%#v) error: %v", i, tt, r.err)
+			continue
+		}
+		if tt.headers != nil {
+			for k, v := range tt.headers {
+				if r.headers.Get(k) != v {
+					t.Errorf("%d: r.headers[%q] = %q; want %q", i, k, v, v)
+				}
+			}
+		}
+
+		if r.body == nil {
+			if len(tt.expected) != 0 {
+				t.Errorf("%d: r.body = %q; want %q", i, r.body, tt.expected)
+			}
 			continue
 		}
 		buf := make([]byte, len(tt.expected))
@@ -1136,13 +1164,6 @@ func TestBody(t *testing.T) {
 		body := string(buf)
 		if body != tt.expected {
 			t.Errorf("%d: r.body = %q; want %q", i, body, tt.expected)
-		}
-		if tt.headers != nil {
-			for k, v := range tt.headers {
-				if r.headers.Get(k) != v {
-					t.Errorf("%d: r.headers[%q] = %q; want %q", i, k, v, v)
-				}
-			}
 		}
 	}
 }
@@ -1242,5 +1263,5 @@ func testRESTClient(t testing.TB, srv *httptest.Server) *RESTClient {
 		}
 	}
 	baseURL.Path = testapi.Default.ResourcePath("", "", "")
-	return NewRESTClient(baseURL, *testapi.Default.GroupVersion(), testapi.Default.Codec(), 0, 0)
+	return NewRESTClient(baseURL, ContentConfig{GroupVersion: testapi.Default.GroupVersion(), Codec: testapi.Default.Codec()}, 0, 0)
 }
