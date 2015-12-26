@@ -24,12 +24,16 @@ import (
 	"k8s.io/kubernetes/pkg/runtime/serializer/versioning"
 )
 
+// serializerExtensions are for serializers that are conditionally compiled in
+var serializerExtensions = []func(*runtime.Scheme) (serializerType, bool){}
+
 type serializerType struct {
 	AcceptContentTypes []string
 	ContentType        string
 	FileExtensions     []string
 	Serializer         runtime.Serializer
 	PrettySerializer   runtime.Serializer
+	Specialize         func(map[string]string) (runtime.Serializer, bool)
 }
 
 // NewCodecFactory enables the standard serializers to be enabled for a given scheme, performing transformation
@@ -53,13 +57,18 @@ func newCodecFactory(scheme *runtime.Scheme, mf json.MetaFactory) CodecFactory {
 			Serializer:         jsonSerializer,
 			PrettySerializer:   jsonPrettySerializer,
 		},
-		{
-			AcceptContentTypes: []string{"application/yaml"},
-			ContentType:        "application/yaml",
-			FileExtensions:     []string{"yaml"},
-			Serializer:         yamlSerializer,
-		},
 	}
+	for _, fn := range serializerExtensions {
+		if serializer, ok := fn(scheme); ok {
+			serializers = append(serializers, serializer)
+		}
+	}
+	serializers = append(serializers, serializerType{
+		AcceptContentTypes: []string{"application/yaml"},
+		ContentType:        "application/yaml",
+		FileExtensions:     []string{"yaml"},
+		Serializer:         yamlSerializer,
+	})
 	decoders := make([]runtime.Decoder, 0, len(serializers))
 	accepts := []string{}
 	alreadyAccepted := make(map[string]struct{})
@@ -149,6 +158,10 @@ func (f CodecFactory) SerializerForMediaType(mediaType string, options map[strin
 	for _, s := range f.serializers {
 		for _, accepted := range s.AcceptContentTypes {
 			if accepted == mediaType {
+				if s.Specialize != nil && len(options) > 0 {
+					serializer, ok := s.Specialize(options)
+					return serializer, ok
+				}
 				if v, ok := options["pretty"]; ok && v == "1" && s.PrettySerializer != nil {
 					return s.PrettySerializer, true
 				}
