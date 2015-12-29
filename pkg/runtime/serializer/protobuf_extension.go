@@ -23,7 +23,7 @@ import (
 	"k8s.io/kubernetes/pkg/runtime/serializer/protobuf"
 )
 
-func protobufSerializer(s *runtime.Scheme) (serializerType, bool) {
+func protobufSerializer(scheme *runtime.Scheme) (serializerType, bool) {
 	protoSerializer := protobuf.NewSerializer(scheme, runtime.ObjectTyperToTyper(scheme))
 	return serializerType{
 		AcceptContentTypes: []string{"application/vnd.kubernetes.protobuf"},
