@@ -24,12 +24,14 @@ import (
 )
 
 func protobufSerializer(scheme *runtime.Scheme) (serializerType, bool) {
-	protoSerializer := protobuf.NewSerializer(scheme, runtime.ObjectTyperToTyper(scheme))
+	serializer := protobuf.NewSerializer(scheme, runtime.ObjectTyperToTyper(scheme))
+	implicit := protobuf.NewImplicitSerializer(scheme, runtime.ObjectTyperToTyper(scheme))
 	return serializerType{
 		AcceptContentTypes: []string{"application/vnd.kubernetes.protobuf"},
 		ContentType:        "application/vnd.kubernetes.protobuf",
 		FileExtensions:     []string{"pb"},
-		Serializer:         protoSerializer,
+		Serializer:         serializer,
+		ImplicitSerializer: implicit,
 	}, true
 }
 

@@ -16,7 +16,9 @@ limitations under the License.
 
 package runtime
 
-import "errors"
+import (
+	"errors"
+)
 
 func (re *RawExtension) UnmarshalJSON(in []byte) error {
 	if re == nil {

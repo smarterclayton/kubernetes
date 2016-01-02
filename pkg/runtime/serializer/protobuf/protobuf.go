@@ -29,6 +29,7 @@ import (
 
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/runtime"
+	"k8s.io/kubernetes/pkg/util/framer"
 )
 
 var (
@@ -172,25 +173,6 @@ func (s *Serializer) Decode(originalData []byte, gvk *unversioned.GroupVersionKi
 	return obj, actual, nil
 }
 
-func copyKindDefaults(dst, src *unversioned.GroupVersionKind) {
-	if src == nil {
-		return
-	}
-	// apply kind and version defaulting from provided default
-	if len(dst.Kind) == 0 {
-		dst.Kind = src.Kind
-	}
-	if len(dst.Version) == 0 && len(src.Version) > 0 {
-		dst.Group = src.Group
-		dst.Version = src.Version
-	}
-}
-
-type bufferedMarshaller interface {
-	proto.Sizer
-	runtime.ProtobufMarshaller
-}
-
 // EncodeToStream serializes the provided object to the given writer. Overrides is ignored.
 func (s *Serializer) EncodeToStream(obj runtime.Object, w io.Writer, overrides ...unversioned.GroupVersion) error {
 	var unk runtime.Unknown
@@ -265,6 +247,38 @@ func (s *Serializer) RecognizesData(peek io.Reader) (bool, error) {
 	return bytes.Equal(s.prefix, prefix), nil
 }
 
+// NewFrameWriter implements stream framing for this serializer
+func (s *Serializer) NewFrameWriter(w io.Writer) io.Writer {
+	return framer.NewLengthDelimitedFrameWriter(w)
+}
+
+// NewFrameReader implements stream framing for this serializer
+func (s *Serializer) NewFrameReader(r io.Reader) io.Reader {
+	return framer.NewLengthDelimitedFrameReader(r)
+}
+
+// copyKindDefaults defaults dst to the value in src if dst does not have a value set.
+func copyKindDefaults(dst, src *unversioned.GroupVersionKind) {
+	if src == nil {
+		return
+	}
+	// apply kind and version defaulting from provided default
+	if len(dst.Kind) == 0 {
+		dst.Kind = src.Kind
+	}
+	if len(dst.Version) == 0 && len(src.Version) > 0 {
+		dst.Group = src.Group
+		dst.Version = src.Version
+	}
+}
+
+// bufferedMarshaller describes a more efficient marshalling interface that can avoid allocating multiple
+// byte buffers by pre-calculating the size of the final buffer needed.
+type bufferedMarshaller interface {
+	proto.Sizer
+	runtime.ProtobufMarshaller
+}
+
 // estimateUnknownSize returns the expected bytes consumed by a given runtime.Unknown
 // object with a nil RawJSON struct and the expected size of the provided buffer. The
 // returned size will not be correct if RawJSOn is set on unk.
@@ -274,4 +288,152 @@ func estimateUnknownSize(unk *runtime.Unknown, byteSize uint64) uint64 {
 	// and the size of the array.
 	size += 1 + 8 + byteSize
 	return size
+}
+
+// NewImplicitSerializer creates a Protobuf serializer that handles encoding versioned objects into the proper wire form. If typer
+// is not nil, the object has the group, version, and kind fields set. This serializer does not provide type information for the
+// encoded object, and thus is not self describing (callers must know what type is being described in order to decode).
+//
+// This encoding scheme is experimental, and is subject to change at any time.
+func NewImplicitSerializer(creater runtime.ObjectCreater, typer runtime.Typer) *ImplicitSerializer {
+	return &ImplicitSerializer{
+		creater: creater,
+		typer:   typer,
+	}
+}
+
+// ImplicitSerializer encodes and decodes objects without wrapping type info directly onto the wire.
+type ImplicitSerializer struct {
+	creater runtime.ObjectCreater
+	typer   runtime.Typer
+}
+
+// Decode attempts to convert the provided data into a protobuf message, extract the stored schema kind, apply the provided default
+// gvk, and then load that data into an object matching the desired schema kind or the provided into. If into is *runtime.Unknown,
+// the raw data will be extracted and no decoding will be performed. If into is not registered with the typer, then the object will
+// be straight decoded using normal protobuf unmarshalling (the MarshalTo interface). If into is provided and the original data is
+// not fully qualified with kind/version/group, the type of the into will be used to alter the returned gvk. On success or most
+// errors, the method will return the calculated schema kind.
+func (s *ImplicitSerializer) Decode(originalData []byte, gvk *unversioned.GroupVersionKind, into runtime.Object) (runtime.Object, *unversioned.GroupVersionKind, error) {
+	if into == nil {
+		return nil, nil, fmt.Errorf("this serializer requires an object to decode into: %#v", s)
+	}
+
+	if versioned, ok := into.(*runtime.VersionedObjects); ok {
+		into = versioned.Last()
+		obj, actual, err := s.Decode(originalData, gvk, into)
+		if err != nil {
+			return nil, actual, err
+		}
+		if into != nil && into != obj {
+			versioned.Objects = []runtime.Object{obj, into}
+		} else {
+			versioned.Objects = []runtime.Object{obj}
+		}
+		return versioned, actual, err
+	}
+
+	if len(originalData) == 0 {
+		// TODO: treat like decoding {} from JSON with defaulting
+		return nil, nil, fmt.Errorf("empty data")
+	}
+	data := originalData
+
+	actual := &unversioned.GroupVersionKind{}
+	copyKindDefaults(actual, gvk)
+
+	if intoUnknown, ok := into.(*runtime.Unknown); ok && intoUnknown != nil {
+		intoUnknown.RawJSON = data
+		intoUnknown.SetGroupVersionKind(actual)
+		// TODO: set content type here
+		return intoUnknown, actual, nil
+	}
+
+	typed, _, err := s.typer.ObjectKind(into)
+	switch {
+	case runtime.IsNotRegisteredError(err):
+		pb, ok := into.(proto.Message)
+		if !ok {
+			return nil, actual, errNotMarshalable{reflect.TypeOf(into)}
+		}
+		if err := proto.Unmarshal(data, pb); err != nil {
+			return nil, actual, err
+		}
+		return into, actual, nil
+	case err != nil:
+		return nil, actual, err
+	default:
+		copyKindDefaults(actual, typed)
+		if len(actual.Version) == 0 && len(actual.Group) == 0 {
+			actual.Group = typed.Group
+		}
+	}
+
+	if len(actual.Kind) == 0 {
+		return nil, actual, runtime.NewMissingKindErr("<protobuf encoded body - must provide default type>")
+	}
+	if len(actual.Version) == 0 {
+		return nil, actual, runtime.NewMissingVersionErr("<protobuf encoded body - must provide default type>")
+	}
+
+	// use the target if necessary
+	obj, err := runtime.UseOrCreateObject(s.typer, s.creater, *actual, into)
+	if err != nil {
+		return nil, actual, err
+	}
+
+	pb, ok := obj.(proto.Message)
+	if !ok {
+		return nil, actual, errNotMarshalable{reflect.TypeOf(obj)}
+	}
+	if err := proto.Unmarshal(data, pb); err != nil {
+		return nil, actual, err
+	}
+	return obj, actual, nil
+}
+
+// EncodeToStream serializes the provided object to the given writer. Overrides is ignored.
+func (s *ImplicitSerializer) EncodeToStream(obj runtime.Object, w io.Writer, overrides ...unversioned.GroupVersion) error {
+	switch t := obj.(type) {
+	case bufferedMarshaller:
+		// this path performs a single allocation during write but requires the caller to implement
+		// the more efficient Size and MarshalTo methods
+		encodedSize := uint64(t.Size())
+		data := make([]byte, encodedSize)
+
+		n, err := t.MarshalTo(data)
+		if err != nil {
+			return err
+		}
+		_, err = w.Write(data[:n])
+		return err
+
+	case proto.Marshaler:
+		// this path performs extra allocations
+		data, err := t.Marshal()
+		if err != nil {
+			return err
+		}
+		_, err = w.Write(data)
+		return err
+
+	default:
+		return errNotMarshalable{reflect.TypeOf(obj)}
+	}
+}
+
+// RecognizesData implements the RecognizingDecoder interface - objects encoded with this serializer
+// have no innate identifying information and so cannot be recognized.
+func (s *ImplicitSerializer) RecognizesData(peek io.Reader) (bool, error) {
+	return false, nil
+}
+
+// NewFrameWriter implements stream framing for this serializer
+func (s *ImplicitSerializer) NewFrameWriter(w io.Writer) io.Writer {
+	return framer.NewLengthDelimitedFrameWriter(w)
+}
+
+// NewFrameReader implements stream framing for this serializer
+func (s *ImplicitSerializer) NewFrameReader(r io.Reader) io.Reader {
+	return framer.NewLengthDelimitedFrameReader(r)
 }

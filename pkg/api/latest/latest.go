@@ -52,6 +52,9 @@ var ExternalVersions = []unversioned.GroupVersion{
 // Codecs provides access to encoding and decoding for the scheme
 var Codecs = serializer.NewCodecFactory(api.Scheme)
 
+// StreamCodecs provides access to streaming encoding and decoding for the scheme
+var StreamCodecs = serializer.NewStreamingCodecFactory(api.Scheme)
+
 // GroupMetaMap is a map between group names and their metadata.
 type GroupMetaMap map[string]*GroupMeta
 

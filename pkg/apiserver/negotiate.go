@@ -47,6 +47,11 @@ func defaultAcceptType(s runtime.NegotiatedSerializer) (goautoneg.Accept, error)
 }
 
 func negotiateOutputSerializer(req *http.Request, ns runtime.NegotiatedSerializer) (runtime.Serializer, string, error) {
+	if ns == nil {
+		// TODO: provide slightly more information about this being programmer error?
+		return nil, "", errNotAcceptable{}
+	}
+
 	acceptHeader := req.Header.Get("Accept")
 	supported := ns.SupportedMediaTypes()
 	if len(acceptHeader) == 0 && len(supported) > 0 {

@@ -430,6 +430,7 @@ func (m *Master) api_v1(c *Config) *apiserver.APIGroupVersion {
 	version.Storage = storage
 	version.GroupVersion = unversioned.GroupVersion{Version: "v1"}
 	version.Serializer = latest.Codecs
+	version.StreamSerializer = latest.StreamCodecs
 	return version
 }
 
@@ -664,8 +665,9 @@ func (m *Master) experimental(c *Config) *apiserver.APIGroupVersion {
 		GroupVersion:           extensionsGroup.GroupVersion,
 		OptionsExternalVersion: &optionsExternalVersion,
 
-		Serializer:     latest.Codecs,
-		ParameterCodec: runtime.NewParameterCodec(api.Scheme),
+		Serializer:       latest.Codecs,
+		StreamSerializer: latest.StreamCodecs,
+		ParameterCodec:   runtime.NewParameterCodec(api.Scheme),
 
 		Admit:   m.AdmissionControl,
 		Context: m.RequestContextMapper,

@@ -67,7 +67,7 @@ func TestWatchWebsocket(t *testing.T) {
 
 	ws, err := websocket.Dial(dest.String(), "", "http://localhost")
 	if err != nil {
-		t.Errorf("unexpected error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 
 	try := func(action watch.EventType, object runtime.Object) {
@@ -84,7 +84,7 @@ func TestWatchWebsocket(t *testing.T) {
 		}
 		gotObj, err := runtime.Decode(codec, got.Object)
 		if err != nil {
-			t.Fatalf("Decode error: %v", err)
+			t.Fatalf("Decode error: %v\n%v", err, got)
 		}
 		if _, err := api.GetReference(gotObj); err != nil {
 			t.Errorf("Unable to construct reference: %v", err)
@@ -373,10 +373,14 @@ func TestWatchHTTPTimeout(t *testing.T) {
 
 	// Setup a new watchserver
 	watchServer := &WatchServer{
-		watcher,
-		newCodec,
-		func(obj runtime.Object) {},
-		&fakeTimeoutFactory{timeoutCh, done},
+		watching: watcher,
+
+		mediaType:       "testcase/json",
+		encoder:         newCodec,
+		embeddedEncoder: newCodec,
+
+		fixup: func(obj runtime.Object) {},
+		t:     &fakeTimeoutFactory{timeoutCh, done},
 	}
 
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {

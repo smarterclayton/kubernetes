@@ -90,12 +90,18 @@ type APIGroupVersion struct {
 	// schema like api.Status, api.DeleteOptions, and api.ListOptions. Other implementors may
 	// define a version "v1beta1" but want to use the Kubernetes "v1" internal objects. If
 	// empty, defaults to GroupVersion.
+	// TODO; remove this, replace with registering the API options per type
 	OptionsExternalVersion *unversioned.GroupVersion
 
 	Mapper meta.RESTMapper
 
-	Serializer     runtime.NegotiatedSerializer
-	ParameterCodec runtime.ParameterCodec
+	// Serializer is used to determine how to convert responses from API methods into bytes to send over
+	// the wire.
+	Serializer runtime.NegotiatedSerializer
+	// StreamSerializer is used for sending a series of objects to the client over a single channel, where
+	// the underlying channel has no innate framing (such as an io.Writer)
+	StreamSerializer runtime.NegotiatedSerializer
+	ParameterCodec   runtime.ParameterCodec
 
 	Typer     runtime.ObjectTyper
 	Creater   runtime.ObjectCreater
