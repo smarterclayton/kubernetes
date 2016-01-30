@@ -33,7 +33,6 @@ import (
 	"k8s.io/kubernetes/pkg/apis/extensions"
 	"k8s.io/kubernetes/pkg/conversion"
 	"k8s.io/kubernetes/pkg/runtime"
-	watchjson "k8s.io/kubernetes/pkg/watch/json"
 
 	"github.com/emicklei/go-restful"
 )
@@ -285,6 +284,14 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 		isGetter = true
 	}
 
+	var versionedWatchEvent runtime.Object
+	if isWatcher {
+		versionedWatchEvent, err = a.group.Creater.New(a.group.GroupVersion.WithKind("WatchEvent"))
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	var (
 		connectOptions             runtime.Object
 		versionedConnectOptions    runtime.Object
@@ -433,11 +440,12 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 	// test/integration/auth_test.go is currently the most comprehensive status code test
 
 	reqScope := RequestScope{
-		ContextFunc:    ctxFn,
-		Serializer:     a.group.Serializer,
-		ParameterCodec: a.group.ParameterCodec,
-		Creater:        a.group.Creater,
-		Convertor:      a.group.Convertor,
+		ContextFunc:      ctxFn,
+		Serializer:       a.group.Serializer,
+		StreamSerializer: a.group.StreamSerializer,
+		ParameterCodec:   a.group.ParameterCodec,
+		Creater:          a.group.Creater,
+		Convertor:        a.group.Convertor,
 
 		Resource:    a.group.GroupVersion.WithResource(resource),
 		Subresource: subresource,
@@ -616,9 +624,9 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 				Doc(doc).
 				Param(ws.QueryParameter("pretty", "If 'true', then the output is pretty printed.")).
 				Operation("watch"+namespaced+kind+strings.Title(subresource)).
-				Produces("application/json").
-				Returns(http.StatusOK, "OK", watchjson.WatchEvent{}).
-				Writes(watchjson.WatchEvent{})
+				Produces(a.group.StreamSerializer.SupportedMediaTypes()...).
+				Returns(http.StatusOK, "OK", versionedWatchEvent).
+				Writes(versionedWatchEvent)
 			if err := addObjectParams(ws, route, versionedListOptions); err != nil {
 				return nil, err
 			}
@@ -635,9 +643,9 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 				Doc(doc).
 				Param(ws.QueryParameter("pretty", "If 'true', then the output is pretty printed.")).
 				Operation("watch"+namespaced+kind+strings.Title(subresource)+"List").
-				Produces("application/json").
-				Returns(http.StatusOK, "OK", watchjson.WatchEvent{}).
-				Writes(watchjson.WatchEvent{})
+				Produces(a.group.StreamSerializer.SupportedMediaTypes()...).
+				Returns(http.StatusOK, "OK", versionedWatchEvent).
+				Writes(versionedWatchEvent)
 			if err := addObjectParams(ws, route, versionedListOptions); err != nil {
 				return nil, err
 			}
