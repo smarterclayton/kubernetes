@@ -1,0 +1,40 @@
+// +build proto
+
+/*
+Copyright 2014 The Kubernetes Authors All rights reserved.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package serializer
+
+import (
+	"k8s.io/kubernetes/pkg/runtime"
+	"k8s.io/kubernetes/pkg/runtime/serializer/protobuf"
+)
+
+func protobufSerializer(scheme *runtime.Scheme) (serializerType, bool) {
+	serializer := protobuf.NewSerializer(scheme, runtime.ObjectTyperToTyper(scheme))
+	implicit := protobuf.NewImplicitSerializer(scheme, runtime.ObjectTyperToTyper(scheme))
+	return serializerType{
+		AcceptContentTypes: []string{"application/vnd.kubernetes.protobuf"},
+		ContentType:        "application/vnd.kubernetes.protobuf",
+		FileExtensions:     []string{"pb"},
+		Serializer:         serializer,
+		ImplicitSerializer: implicit,
+	}, true
+}
+
+func init() {
+	serializerExtensions = append(serializerExtensions, protobufSerializer)
+}

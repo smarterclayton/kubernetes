@@ -61,8 +61,6 @@ func fuzzInternalObject(t *testing.T, forVersion unversioned.GroupVersion, item 
 }
 
 func roundTrip(t *testing.T, codec runtime.Codec, item runtime.Object) {
-	t.Logf("codec: %#v", codec)
-
 	printer := spew.ConfigState{DisableMethods: true}
 
 	name := reflect.TypeOf(item).Elem().Name()
@@ -120,10 +118,7 @@ func roundTripSame(t *testing.T, item runtime.Object, except ...string) {
 
 // For debugging problems
 func TestSpecificKind(t *testing.T) {
-	// api.Scheme.Log(t)
-	// defer api.Scheme.Log(nil)
-
-	kind := "List"
+	kind := "Pod"
 	for i := 0; i < *fuzzIters; i++ {
 		doRoundTripTest(kind, t)
 		if t.Failed() {
@@ -133,9 +128,6 @@ func TestSpecificKind(t *testing.T) {
 }
 
 func TestList(t *testing.T) {
-	// api.Scheme.Log(t)
-	// defer api.Scheme.Log(nil)
-
 	kind := "List"
 	item, err := api.Scheme.New(api.SchemeGroupVersion.WithKind(kind))
 	if err != nil {
@@ -151,9 +143,6 @@ var nonInternalRoundTrippableTypes = sets.NewString("List", "ListOptions", "Expo
 var nonRoundTrippableTypesByVersion = map[string][]string{}
 
 func TestRoundTripTypes(t *testing.T) {
-	// api.Scheme.Log(t)
-	// defer api.Scheme.Log(nil)
-
 	for kind := range api.Scheme.KnownTypes(testapi.Default.InternalGroupVersion()) {
 		t.Logf("working on %v in %v", kind, testapi.Default.InternalGroupVersion())
 		if nonRoundTrippableTypes.Has(kind) {
@@ -280,6 +269,26 @@ func BenchmarkEncodeCodec(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if _, err := runtime.Encode(testapi.Default.Codec(), &items[i%width]); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+}
+
+// BenchmarkEncodeCodecFromInternal measures the cost of performing a codec encode,
+// including conversions.
+func BenchmarkEncodeCodecFromInternal(b *testing.B) {
+	items := benchmarkItems()
+	width := len(items)
+	encodable := make([]api.Pod, width)
+	for i := range items {
+		if err := api.Scheme.Convert(&items[i], &encodable[i]); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := runtime.Encode(testapi.Default.Codec(), &encodable[i%width]); err != nil {
 			b.Fatal(err)
 		}
 	}
