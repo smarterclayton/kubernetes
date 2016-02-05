@@ -32,9 +32,12 @@ import (
 
 type ConversionGenerator interface {
 	GenerateConversionsForType(groupVersion unversioned.GroupVersion, reflection reflect.Type) error
+	GenerateDefaulterForType(gvk unversioned.GroupVersionKind, reflection reflect.Type) error
 	WriteConversionFunctions(w io.Writer) error
+	WriteDefaultingFunctions(w io.Writer) error
 	RegisterConversionFunctions(w io.Writer, pkg string) error
 	AddImport(pkg string) string
+	CalculateDefaulters()
 	RepackImports(exclude sets.String)
 	WriteImports(w io.Writer) error
 	OverwritePackage(pkg, overwrite string)
@@ -49,12 +52,15 @@ func NewConversionGenerator(scheme *Scheme, targetPkg string) ConversionGenerato
 		generatedNamePrefix: "auto",
 		targetPkg:           targetPkg,
 
+		defaulterNameFormat: "Default_%s_%s",
+
 		publicFuncs:   make(map[typePair]string),
 		convertibles:  make(map[reflect.Type]reflect.Type),
 		overridden:    make(map[reflect.Type]bool),
 		pkgOverwrites: make(map[string]string),
 		imports:       make(map[string]string),
 		shortImports:  make(map[string]string),
+		defaultPaths:  make(map[reflect.Type]defaultTree),
 	}
 	g.targetPackage(targetPkg)
 	g.AddImport("reflect")
@@ -64,6 +70,24 @@ func NewConversionGenerator(scheme *Scheme, targetPkg string) ConversionGenerato
 
 var complexTypes []reflect.Kind = []reflect.Kind{reflect.Map, reflect.Ptr, reflect.Slice, reflect.Interface, reflect.Struct}
 
+type accessPath struct {
+	field string
+	key   bool
+	index bool
+	elem  bool
+}
+
+type defaultPath struct {
+	path []accessPath
+
+	name, packageName string
+	reflection        bool
+}
+
+type defaultTree struct {
+	paths []defaultPath
+}
+
 type conversionGenerator struct {
 	scheme *Scheme
 
@@ -71,9 +95,15 @@ type conversionGenerator struct {
 	generatedNamePrefix string
 	targetPkg           string
 
+	defaulterNameFormat string
+
 	publicFuncs  map[typePair]string
 	convertibles map[reflect.Type]reflect.Type
 	overridden   map[reflect.Type]bool
+
+	defaultsToFunc map[reflect.Type]reflect.Type
+	defaultPaths   map[reflect.Type]defaultTree
+
 	// If pkgOverwrites is set for a given package name, that package name
 	// will be replaced while writing conversion function. If empty, package
 	// name will be omitted.
@@ -118,6 +148,107 @@ func (g *conversionGenerator) GenerateConversionsForType(gv unversioned.GroupVer
 		return fmt.Errorf("errors: %v, %v", inErr, outErr)
 	}
 	return nil
+}
+
+func (g *conversionGenerator) GenerateDefaulterForType(gvk unversioned.GroupVersionKind, reflection reflect.Type) error {
+	obj, err := g.scheme.New(gvk)
+	if err != nil {
+		return fmt.Errorf("cannot create an object of type %v", gvk)
+	}
+	objType := reflect.TypeOf(obj)
+	if objType.Kind() != reflect.Ptr {
+		return fmt.Errorf("created object should be of type Ptr: %v", objType.Kind())
+	}
+	if objType.Elem().Kind() != reflect.Struct {
+		return fmt.Errorf("created object pointer should be of type Struct: %v", objType.Kind())
+	}
+	g.defaultPaths[objType.Elem()] = defaultTree{}
+	return nil
+}
+
+func (g *conversionGenerator) CalculateDefaulters() {
+	newPaths := make(map[reflect.Type]defaultTree)
+	for t := range g.defaultPaths {
+		paths := g.traverseType(t, nil)
+		if len(paths) == 0 {
+			log.Printf("no defaulting for %v", t)
+			continue
+		}
+
+		log.Printf("defaulter for %v", t)
+		for i, path := range paths {
+			log.Printf("  %d: %#v", i, path)
+		}
+		newPaths[t] = defaultTree{paths: paths}
+	}
+	g.defaultPaths = newPaths
+}
+
+func (g *conversionGenerator) traverseType(t reflect.Type, path []accessPath) []defaultPath {
+	if n, p, reflection, ok := g.hasDefaulter(t); ok {
+		return []defaultPath{{path: newPath(path), name: n, packageName: p, reflection: reflection}}
+	}
+	switch t.Kind() {
+	case reflect.Ptr:
+		return g.traverseType(t.Elem(), append(path, accessPath{elem: true}))
+	case reflect.Slice, reflect.Array:
+		return g.traverseType(t.Elem(), append(path, accessPath{index: true}))
+	case reflect.Map:
+		return g.traverseType(t.Elem(), append(path, accessPath{key: true}))
+	case reflect.Struct:
+		var paths []defaultPath
+		for i := 0; i < t.NumField(); i++ {
+			field := t.Field(i)
+			name := field.Name
+			if len(name) == 0 {
+				if field.Type.Kind() == reflect.Ptr {
+					name = field.Type.Elem().Name()
+				} else {
+					name = field.Type.Name()
+				}
+			}
+			paths = append(paths, g.traverseType(field.Type, newPath(path, accessPath{field: name}))...)
+		}
+		return paths
+	default:
+		//log.Printf("DEBUG: terminate at kind %v %v", t.Kind(), t)
+	}
+	return nil
+}
+
+func (g *conversionGenerator) hasDefaulter(t reflect.Type) (name, packageName string, reflection, ok bool) {
+	switch t.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64, reflect.String:
+		return "", "", false, false
+	}
+
+	fn, ok := g.scheme.Converter().DefaultingFunc(t)
+	if !ok {
+		return "", "", false, false
+	}
+	n, p, public, ok := publicFuncName(fn)
+	if !ok {
+		log.Printf("WARNING: defaulting func for %v is not named, can't generate fast defaults", t)
+		return "", "", true, true
+	}
+	full := p
+	if len(full) > 0 {
+		full += "."
+	}
+	full += n
+	if !public {
+		log.Printf("WARNING: defaulting func %s for %v is not public, can't generate fast defaults", full, t)
+		return "", "", true, true
+	}
+	return n, p, false, true
+}
+
+func newPath(path []accessPath, add ...accessPath) []accessPath {
+	copied := make([]accessPath, len(path)+len(add))
+	copy(copied, path)
+	return append(copied, add...)
 }
 
 // primitiveConversion returns true if the two types can be converted via a cast.
@@ -240,30 +371,41 @@ func (g *conversionGenerator) rememberConversionFunction(inType, outType reflect
 	}
 
 	if v, ok := g.scheme.Converter().ConversionFuncValue(inType, outType); ok {
-		if fn := goruntime.FuncForPC(v.Pointer()); fn != nil {
-			name := fn.Name()
-			var p, n string
-			if last := strings.LastIndex(name, "."); last != -1 {
-				p = name[:last]
-				n = name[last+1:]
-				p = g.imports[p]
-				if len(p) > 0 {
-					p = p + "."
-				}
-			} else {
-				n = name
-			}
-			if isPublic(n) {
-				g.publicFuncs[typePair{inType, outType}] = p + n
-			} else {
-				log.Printf("WARNING: Cannot generate conversion %v -> %v, method %q is private", inType, outType, fn.Name())
-			}
-		} else {
+		n, p, public, ok := publicFuncName(v)
+		if !ok {
 			log.Printf("WARNING: Cannot generate conversion %v -> %v, method is not accessible", inType, outType)
+			return
 		}
+		if !public {
+			log.Printf("WARNING: Cannot generate conversion %v -> %v, method %q is private", inType, outType, n)
+			return
+		}
+
+		p = g.imports[p]
+		if len(p) > 0 {
+			p = p + "."
+		}
+		g.publicFuncs[typePair{inType, outType}] = p + n
+
 	} else if willGenerate {
 		g.publicFuncs[typePair{inType, outType}] = g.conversionFunctionName(inType, outType)
 	}
+}
+
+func publicFuncName(v reflect.Value) (name, packageName string, public bool, ok bool) {
+	fn := goruntime.FuncForPC(v.Pointer())
+	if fn == nil {
+		return "", "", false, false
+	}
+	fullName := fn.Name()
+	var p, n string
+	if last := strings.LastIndex(fullName, "."); last != -1 {
+		p = fullName[:last]
+		n = fullName[last+1:]
+	} else {
+		n = fullName
+	}
+	return n, p, isPublic(n), true
 }
 
 func isPublic(name string) bool {
@@ -900,4 +1042,94 @@ var defaultConversions []typePair = []typePair{}
 
 func (g *conversionGenerator) OverwritePackage(pkg, overwrite string) {
 	g.pkgOverwrites[pkg] = overwrite
+}
+
+func (g *conversionGenerator) generatedDefaulterFunctionName(inType reflect.Type) string {
+	return "auto" + g.defaulterFunctionName(inType)
+}
+
+func (g *conversionGenerator) WriteDefaultingFunctions(w io.Writer) error {
+	// It's desired to print conversion functions always in the same order
+	// (e.g. for better tracking of what has really been added).
+	var keys []reflect.Type
+	for key := range g.defaultPaths {
+		keys = append(keys, key)
+	}
+	sort.Sort(byName(keys))
+
+	buffer := newBuffer()
+	indent := 0
+	for _, inType := range keys {
+		// All types in g.defaultPaths are structs.
+		if inType.Kind() != reflect.Struct {
+			return fmt.Errorf("non-struct conversions are not-supported")
+		}
+		if err := g.writeDefaulterForType(buffer, inType, indent); err != nil {
+			return err
+		}
+	}
+	if err := buffer.flushLines(w); err != nil {
+		return err
+	}
+	return nil
+
+}
+
+func (g *conversionGenerator) writeDefaulterHeader(b *buffer, name, inType string, indent int) {
+	format := "func %s(in *%s) {\n"
+	stmt := fmt.Sprintf(format, name, inType)
+	b.addLine(stmt, indent)
+}
+
+func (g *conversionGenerator) writeDefaulterFooter(b *buffer, indent int) {
+	b.addLine("}\n", indent)
+}
+
+func (g *conversionGenerator) writeDefaulterForType(b *buffer, inType reflect.Type, indent int) error {
+	// Always emit the auto-generated name.
+	autoFuncName := g.generatedDefaulterFunctionName(inType)
+	g.writeDefaulterHeader(b, autoFuncName, g.typeName(inType), indent)
+	// if err := g.writeDefaultingFunc(b, inType, indent+1); err != nil {
+	// 	return err
+	// }
+	switch inType.Kind() {
+	case reflect.Struct:
+		if err := g.writeDefaulterForStruct(b, inType, indent+1); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("type not supported: %v", inType)
+	}
+	b.addLine("\n", 0)
+	g.writeDefaulterFooter(b, indent)
+	b.addLine("\n", 0)
+
+	if !g.overridden[inType] {
+		// Also emit the "user-facing" name.
+		userFuncName := g.defaulterFunctionName(inType)
+		g.writeDefaulterHeader(b, userFuncName, g.typeName(inType), indent)
+		b.addLine(fmt.Sprintf("return %s(in, out, s)\n", autoFuncName), indent+1)
+		b.addLine("}\n\n", 0)
+	}
+
+	return nil
+}
+
+func (g *conversionGenerator) writeDefaulterForStruct(b *buffer, inType reflect.Type, indent int) error {
+	defaults, ok := g.defaultPaths[inType]
+	if !ok {
+		return fmt.Errorf("could not find defaulting data for type %v", inType)
+	}
+
+	for _, path := range defaults.paths {
+		b.addLine(fmt.Sprintf("// generate invoke default %v", path), indent)
+	}
+	return nil
+}
+
+func (g *conversionGenerator) defaulterFunctionName(inType reflect.Type) string {
+	funcNameFormat := g.defaulterNameFormat
+	inPkg := packageForName(inType)
+	funcName := fmt.Sprintf(funcNameFormat, inPkg, inType.Name())
+	return funcName
 }

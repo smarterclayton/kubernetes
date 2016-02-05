@@ -79,7 +79,7 @@ func main() {
 		funcOut = file
 	}
 
-	data := new(bytes.Buffer)
+	data := &bytes.Buffer{}
 
 	gv, err := unversioned.ParseGroupVersion(*groupVersion)
 	if err != nil {
@@ -97,14 +97,18 @@ func main() {
 	generator.AddImport(path.Join(pkgBase, "api/resource"))
 	// TODO(wojtek-t): Change the overwrites to a flag.
 	generator.OverwritePackage(gv.Version, "")
-	for _, knownType := range api.Scheme.KnownTypes(gv) {
+	for kind, knownType := range api.Scheme.KnownTypes(gv) {
 		if knownType.PkgPath() != versionPath {
 			continue
 		}
 		if err := generator.GenerateConversionsForType(gv, knownType); err != nil {
 			glog.Errorf("Error while generating conversion functions for %v: %v", knownType, err)
 		}
+		if err := generator.GenerateDefaulterForType(gv.WithKind(kind), knownType); err != nil {
+			glog.Errorf("Error while generating defaulting functions for %v: %v", knownType, err)
+		}
 	}
+	generator.CalculateDefaulters()
 	generator.RepackImports(sets.NewString())
 	if err := generator.WriteImports(data); err != nil {
 		glog.Fatalf("Error while writing imports: %v", err)
@@ -126,4 +130,10 @@ func main() {
 	if _, err := funcOut.Write(b); err != nil {
 		glog.Fatalf("Error while writing out the resulting file: %v", err)
 	}
+
+	data = &bytes.Buffer{}
+	if err := generator.WriteDefaultingFunctions(data); err != nil {
+		glog.Fatalf("Error while writing conversion functions: %v", err)
+	}
+	glog.Infof("generate:\n\n%s", data)
 }

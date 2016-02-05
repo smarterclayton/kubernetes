@@ -441,6 +441,11 @@ func (c *Converter) RegisterDefaultingFunc(defaultingFunc interface{}) error {
 	return nil
 }
 
+func (c *Converter) DefaultingFunc(t reflect.Type) (reflect.Value, bool) {
+	v, ok := c.defaultingFuncs[t]
+	return v, ok
+}
+
 // RegisterInputDefaults registers a field name mapping function, used when converting
 // from maps to structs. Inputs to the conversion methods are checked for this type and a mapping
 // applied automatically if the input matches in. A set of default flags for the input conversion
