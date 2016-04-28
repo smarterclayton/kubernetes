@@ -32,10 +32,10 @@ func TestResourceHelpers(t *testing.T) {
 			"kube.io/storage": memoryLimit,
 		},
 	}
-	if res := resourceSpec.Limits.Cpu(); *res != cpuLimit {
+	if res := resourceSpec.Limits.Cpu(); cpuLimit.Cmp(*res) != 0 {
 		t.Errorf("expected cpulimit %v, got %v", cpuLimit, res)
 	}
-	if res := resourceSpec.Limits.Memory(); *res != memoryLimit {
+	if res := resourceSpec.Limits.Memory(); memoryLimit.Cmp(*res) != 0 {
 		t.Errorf("expected memorylimit %v, got %v", memoryLimit, res)
 	}
 	resourceSpec = ResourceRequirements{
@@ -47,7 +47,7 @@ func TestResourceHelpers(t *testing.T) {
 	if res := resourceSpec.Limits.Cpu(); res.Value() != 0 {
 		t.Errorf("expected cpulimit %v, got %v", 0, res)
 	}
-	if res := resourceSpec.Limits.Memory(); *res != memoryLimit {
+	if res := resourceSpec.Limits.Memory(); memoryLimit.Cmp(*res) != 0 {
 		t.Errorf("expected memorylimit %v, got %v", memoryLimit, res)
 	}
 }

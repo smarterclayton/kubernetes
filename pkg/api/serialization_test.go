@@ -31,6 +31,7 @@ import (
 
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/meta"
+	"k8s.io/kubernetes/pkg/api/resource"
 	"k8s.io/kubernetes/pkg/api/testapi"
 	apitesting "k8s.io/kubernetes/pkg/api/testing"
 	"k8s.io/kubernetes/pkg/api/unversioned"
@@ -438,6 +439,25 @@ func BenchmarkDecodeIntoJSONCodecGen(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		obj := v1.Pod{}
 		if err := codec.NewDecoderBytes(encoded[i%width], handler).Decode(&obj); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+}
+
+// BenchmarkConvertResourceQuantity measures quantity copy performancea
+func BenchmarkConvertResourceQuantity(b *testing.B) {
+	apiObjectFuzzer := apitesting.FuzzerFor(nil, api.SchemeGroupVersion, rand.NewSource(benchmarkSeed))
+	items := make([]resource.Quantity, 5)
+	for i := range items {
+		apiObjectFuzzer.Fuzz(&items[i])
+	}
+	width := len(items)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var out resource.Quantity
+		if err := api.Convert_resource_Quantity_To_resource_Quantity(&items[i%width], &out, nil); err != nil {
 			b.Fatal(err)
 		}
 	}

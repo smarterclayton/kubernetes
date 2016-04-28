@@ -91,7 +91,7 @@ import (
 type Quantity struct {
 	// Amount is public, so you can manipulate it if the accessor
 	// functions are not sufficient.
-	Amount *inf.Dec
+	Amount inf.Dec
 
 	// Change Format at will. See the comment for Canonicalize for
 	// more details.
@@ -181,7 +181,7 @@ func ParseQuantity(str string) (*Quantity, error) {
 		return nil, ErrFormatWrong
 	}
 
-	amount := new(inf.Dec)
+	var amount inf.Dec
 	if _, ok := amount.SetString(parts[1]); !ok {
 		return nil, ErrNumeric
 	}
@@ -204,7 +204,7 @@ func ParseQuantity(str string) (*Quantity, error) {
 	// Cap at min/max bounds.
 	sign := amount.Sign()
 	if sign == -1 {
-		amount.Neg(amount)
+		amount.Neg(&amount)
 	}
 
 	// This rounds non-zero values up to the minimum representable value, under the theory that
@@ -212,7 +212,7 @@ func ParseQuantity(str string) (*Quantity, error) {
 	// of an amount.  Arguably, this should be inf.RoundHalfUp (normal rounding), but that would have
 	// the side effect of rounding values < .5n to zero.
 	if v, ok := amount.Unscaled(); v != int64(0) || !ok {
-		amount.Round(amount, Nano.infScale(), inf.RoundUp)
+		amount.Round(&amount, Nano.infScale(), inf.RoundUp)
 	}
 
 	// The max is just a simple cap.
@@ -224,7 +224,7 @@ func ParseQuantity(str string) (*Quantity, error) {
 		format = DecimalSI
 	}
 	if sign == -1 {
-		amount.Neg(amount)
+		amount.Neg(&amount)
 	}
 
 	return &Quantity{amount, format}, nil
@@ -256,10 +256,6 @@ func removeFactors(d, factor *big.Int) (result *big.Int, times int) {
 // * Otherwise, if q.Format is set to BinarySI, frational parts of q.Amount will be
 //   rounded up. (1.1i becomes 2i.)
 func (q *Quantity) Canonicalize() (string, suffix) {
-	if q.Amount == nil {
-		return "0", ""
-	}
-
 	// zero is zero always
 	if q.Amount.Cmp(&inf.Dec{}) == 0 {
 		return "0", ""
@@ -274,8 +270,8 @@ func (q *Quantity) Canonicalize() (string, suffix) {
 			format = DecimalSI
 		} else {
 			tmp := &inf.Dec{}
-			tmp.Round(q.Amount, 0, inf.RoundUp)
-			if tmp.Cmp(q.Amount) != 0 {
+			tmp.Round(&q.Amount, 0, inf.RoundUp)
+			if tmp.Cmp(&q.Amount) != 0 {
 				// Don't lose precision-- show as DecimalSI
 				format = DecimalSI
 			}
@@ -306,7 +302,7 @@ func (q *Quantity) Canonicalize() (string, suffix) {
 		return number, suffix
 	case BinarySI:
 		tmp := &inf.Dec{}
-		tmp.Round(q.Amount, 0, inf.RoundUp)
+		tmp.Round(&q.Amount, 0, inf.RoundUp)
 
 		amount, exponent := removeFactors(tmp.UnscaledBig(), big1024)
 		suffix, _ := quantitySuffixer.construct(2, exponent*10, format)
@@ -329,67 +325,34 @@ func (q *Quantity) String() string {
 //   +1 if q >  y
 //
 func (q *Quantity) Cmp(y Quantity) int {
-	if q.Amount == nil {
-		if y.Amount == nil {
-			return 0
-		}
-		return -y.Amount.Sign()
-	}
-	if y.Amount == nil {
-		return q.Amount.Sign()
-	}
-	return q.Amount.Cmp(y.Amount)
+	return q.Amount.Cmp(&y.Amount)
 }
 
 func (q *Quantity) Add(y Quantity) error {
-	switch {
-	case y.Amount == nil:
-		// Adding 0: do nothing.
-	case q.Amount == nil:
-		q.Amount = &inf.Dec{}
-		return q.Add(y)
-	default:
-		// we want to preserve the format of the non-zero value
-		zero := &inf.Dec{}
-		if q.Amount.Cmp(zero) == 0 && y.Amount.Cmp(zero) != 0 {
-			q.Format = y.Format
-		}
-		q.Amount.Add(q.Amount, y.Amount)
+	// we want to preserve the format of the non-zero value
+	zero := &inf.Dec{}
+	if q.Amount.Cmp(zero) == 0 && y.Amount.Cmp(zero) != 0 {
+		q.Format = y.Format
 	}
+	q.Amount.Add(&q.Amount, &y.Amount)
 	return nil
 }
 
 func (q *Quantity) Sub(y Quantity) error {
-	switch {
-	case y.Amount == nil:
-		// Subtracting 0: do nothing.
-	case q.Amount == nil:
-		q.Amount = &inf.Dec{}
-		return q.Sub(y)
-	default:
-		// we want to preserve the format of the non-zero value
-		zero := &inf.Dec{}
-		if q.Amount.Cmp(zero) == 0 && y.Amount.Cmp(zero) != 0 {
-			q.Format = y.Format
-		}
-		q.Amount.Sub(q.Amount, y.Amount)
+	// we want to preserve the format of the non-zero value
+	zero := &inf.Dec{}
+	if q.Amount.Cmp(zero) == 0 && y.Amount.Cmp(zero) != 0 {
+		q.Format = y.Format
 	}
+	q.Amount.Sub(&q.Amount, &y.Amount)
 	return nil
 }
 
 // Neg sets q to the negative value of y.
 // It updates the format of q to match y.
 func (q *Quantity) Neg(y Quantity) error {
-	switch {
-	case y.Amount == nil:
-		*q = y
-	case q.Amount == nil:
-		q.Amount = &inf.Dec{}
-		fallthrough
-	default:
-		q.Amount.Neg(y.Amount)
-		q.Format = y.Format
-	}
+	q.Amount.Neg(&y.Amount)
+	q.Format = y.Format
 	return nil
 }
 
@@ -414,7 +377,7 @@ func (q *Quantity) UnmarshalJSON(value []byte) error {
 // value in the given format.
 func NewQuantity(value int64, format Format) *Quantity {
 	return &Quantity{
-		Amount: inf.NewDec(value, 0),
+		Amount: *inf.NewDec(value, 0),
 		Format: format,
 	}
 }
@@ -425,7 +388,7 @@ func NewQuantity(value int64, format Format) *Quantity {
 // values x where (-1 < x < 1) && (x != 0).
 func NewMilliQuantity(value int64, format Format) *Quantity {
 	return &Quantity{
-		Amount: inf.NewDec(value, 3),
+		Amount: *inf.NewDec(value, 3),
 		Format: format,
 	}
 }
@@ -434,7 +397,7 @@ func NewMilliQuantity(value int64, format Format) *Quantity {
 // value * 10^scale in DecimalSI format.
 func NewScaledQuantity(value int64, scale Scale) *Quantity {
 	return &Quantity{
-		Amount: inf.NewDec(value, scale.infScale()),
+		Amount: *inf.NewDec(value, scale.infScale()),
 		Format: DecimalSI,
 	}
 }
@@ -453,9 +416,6 @@ func (q *Quantity) MilliValue() int64 {
 // ScaledValue returns the value of ceil(q * 10^scale); this could overflow an int64.
 // To detect overflow, call Value() first and verify the expected magnitude.
 func (q *Quantity) ScaledValue(scale Scale) int64 {
-	if q.Amount == nil {
-		return 0
-	}
 	return scaledValue(q.Amount.UnscaledBig(), int(q.Amount.Scale()), int(scale.infScale()))
 }
 
@@ -471,9 +431,6 @@ func (q *Quantity) SetMilli(value int64) {
 
 // SetScaled sets q's value to be value * 10^scale
 func (q *Quantity) SetScaled(value int64, scale Scale) {
-	if q.Amount == nil {
-		q.Amount = &inf.Dec{}
-	}
 	q.Amount.SetUnscaled(value)
 	q.Amount.SetScale(scale.infScale())
 }
@@ -481,12 +438,9 @@ func (q *Quantity) SetScaled(value int64, scale Scale) {
 // Copy is a convenience function that makes a deep copy for you. Non-deep
 // copies of quantities share pointers and you will regret that.
 func (q *Quantity) Copy() *Quantity {
-	if q.Amount == nil {
-		return NewQuantity(0, q.Format)
-	}
 	tmp := &inf.Dec{}
 	return &Quantity{
-		Amount: tmp.Set(q.Amount),
+		Amount: *tmp.Set(&q.Amount),
 		Format: q.Format,
 	}
 }

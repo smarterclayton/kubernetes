@@ -44,10 +44,8 @@ func (q *Quantity) QuantityProto() *QuantityProto {
 	p := &QuantityProto{
 		Format: q.Format,
 	}
-	if q.Amount != nil {
-		p.Scale = int32(q.Amount.Scale())
-		p.Bigint = q.Amount.UnscaledBig().Bytes()
-	}
+	p.Scale = int32(q.Amount.Scale())
+	p.Bigint = q.Amount.UnscaledBig().Bytes()
 	return p
 }
 
@@ -63,7 +61,7 @@ func (q *Quantity) Unmarshal(data []byte) error {
 	q.Format = p.Format
 	b := big.NewInt(0)
 	b.SetBytes(p.Bigint)
-	q.Amount = inf.NewDecBig(b, inf.Scale(p.Scale))
+	q.Amount = *inf.NewDecBig(b, inf.Scale(p.Scale))
 	return nil
 }
 

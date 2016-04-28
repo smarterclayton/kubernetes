@@ -26,16 +26,10 @@ import (
 )
 
 func DeepCopy_resource_Quantity(in Quantity, out *Quantity, c *conversion.Cloner) error {
-	if in.Amount != nil {
-		in, out := in.Amount, &out.Amount
-		*out = new(inf.Dec)
-		if newVal, err := c.DeepCopy(*in); err != nil {
-			return err
-		} else {
-			**out = newVal.(inf.Dec)
-		}
+	if newVal, err := c.DeepCopy(in.Amount); err != nil {
+		return err
 	} else {
-		out.Amount = nil
+		out.Amount = newVal.(inf.Dec)
 	}
 	out.Format = in.Format
 	return nil

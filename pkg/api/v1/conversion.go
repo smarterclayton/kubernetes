@@ -555,7 +555,7 @@ func Convert_v1_ResourceList_To_api_ResourceList(in *ResourceList, out *api.Reso
 		// TODO(#18538): We round up resource values to milli scale to maintain API compatibility.
 		// In the future, we should instead reject values that need rounding.
 		const milliScale = 3
-		value.Amount.Round(value.Amount, milliScale, inf.RoundUp)
+		value.Amount.Round(&value.Amount, milliScale, inf.RoundUp)
 
 		converted[api.ResourceName(key)] = *value
 	}

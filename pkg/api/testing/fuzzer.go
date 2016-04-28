@@ -58,6 +58,10 @@ func FuzzerFor(t *testing.T, version unversioned.GroupVersion, src rand.Source) 
 			}
 		},
 		func(q *resource.Quantity, c fuzz.Continue) {
+			if c.RandBool() {
+				*q = resource.Quantity{Format: resource.BinarySI}
+				return
+			}
 			*q = *resource.NewQuantity(c.Int63n(1000), resource.DecimalExponent)
 		},
 		func(j *runtime.TypeMeta, c fuzz.Continue) {
@@ -214,15 +218,21 @@ func FuzzerFor(t *testing.T, version unversioned.GroupVersion, src rand.Source) 
 			}
 			q.Limits = make(api.ResourceList)
 			q.Requests = make(api.ResourceList)
-			cpuLimit := randomQuantity()
-			q.Limits[api.ResourceCPU] = *cpuLimit.Copy()
-			q.Requests[api.ResourceCPU] = *cpuLimit.Copy()
-			memoryLimit := randomQuantity()
-			q.Limits[api.ResourceMemory] = *memoryLimit.Copy()
-			q.Requests[api.ResourceMemory] = *memoryLimit.Copy()
-			storageLimit := randomQuantity()
-			q.Limits[api.ResourceStorage] = *storageLimit.Copy()
-			q.Requests[api.ResourceStorage] = *storageLimit.Copy()
+			if c.RandBool() {
+				cpuLimit := randomQuantity()
+				q.Limits[api.ResourceCPU] = *cpuLimit.Copy()
+				q.Requests[api.ResourceCPU] = *cpuLimit.Copy()
+			}
+			if c.RandBool() {
+				memoryLimit := randomQuantity()
+				q.Limits[api.ResourceMemory] = *memoryLimit.Copy()
+				q.Requests[api.ResourceMemory] = *memoryLimit.Copy()
+			}
+			if c.RandBool() {
+				storageLimit := randomQuantity()
+				q.Limits[api.ResourceStorage] = *storageLimit.Copy()
+				q.Requests[api.ResourceStorage] = *storageLimit.Copy()
+			}
 		},
 		func(q *api.LimitRangeItem, c fuzz.Continue) {
 			var cpuLimit resource.Quantity
