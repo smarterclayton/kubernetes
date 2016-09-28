@@ -538,10 +538,14 @@ func (r *Request) Body(obj interface{}) *Request {
 			r.err = err
 			return r
 		}
-		glog.V(8).Infof("Request Body: %#v", string(data))
+		if glog.V(8) {
+			glogPrintBody("Request body: ", []byte(t))
+		}
 		r.body = bytes.NewReader(data)
 	case []byte:
-		glog.V(8).Infof("Request Body: %#v", string(t))
+		if glog.V(8) {
+			glogPrintBody("Request body: ", t)
+		}
 		r.body = bytes.NewReader(t)
 	case io.Reader:
 		r.body = t
@@ -555,7 +559,9 @@ func (r *Request) Body(obj interface{}) *Request {
 			r.err = err
 			return r
 		}
-		glog.V(8).Infof("Request Body: %#v", string(data))
+		if glog.V(8) {
+			glogPrintBody("Request body: ", data)
+		}
 		r.body = bytes.NewReader(data)
 		r.SetHeader("Content-Type", r.content.ContentType)
 	default:
@@ -879,6 +885,15 @@ func (r *Request) DoRaw() ([]byte, error) {
 	return result.body, result.err
 }
 
+func glogPrintBody(message string, body []byte) {
+	switch {
+	case bytes.IndexFunc(body, func(r rune) bool { return r < 0x0a }) != -1:
+		glog.Infof(message+"\n%s", hex.Dump(body))
+	default:
+		glog.Infof(message+"%s", string(body))
+	}
+}
+
 // transformResponse converts an API response into a structured API object
 func (r *Request) transformResponse(resp *http.Response, req *http.Request) Result {
 	var body []byte
@@ -889,12 +904,7 @@ func (r *Request) transformResponse(resp *http.Response, req *http.Request) Resu
 	}
 
 	if glog.V(8) {
-		switch {
-		case bytes.IndexFunc(body, func(r rune) bool { return r < 0x0a }) != -1:
-			glog.Infof("Response Body:\n%s", hex.Dump(body))
-		default:
-			glog.Infof("Response Body: %s", string(body))
-		}
+		glogPrintBody("Response body: ", body)
 	}
 
 	// verify the content type is accurate
