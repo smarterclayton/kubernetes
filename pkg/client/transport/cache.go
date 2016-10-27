@@ -34,7 +34,7 @@ type tlsTransportCache struct {
 	transports map[string]*http.Transport
 }
 
-const idleConnsPerHost = 25
+const idleConnsPerHost = 400
 
 var tlsCache = &tlsTransportCache{transports: make(map[string]*http.Transport)}
 
@@ -60,7 +60,18 @@ func (c *tlsTransportCache) get(config *Config) (http.RoundTripper, error) {
 	}
 	// The options didn't require a custom TLS config
 	if tlsConfig == nil {
-		return http.DefaultTransport, nil
+		return &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			Dial: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).Dial,
+			MaxIdleConns:          idleConnsPerHost * 5,
+			MaxIdleConnsPerHost:   idleConnsPerHost,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		}, nil
 	}
 
 	// Cache a single transport for these options
@@ -68,6 +79,7 @@ func (c *tlsTransportCache) get(config *Config) (http.RoundTripper, error) {
 		Proxy:               http.ProxyFromEnvironment,
 		TLSHandshakeTimeout: 10 * time.Second,
 		TLSClientConfig:     tlsConfig,
+		MaxIdleConns:        idleConnsPerHost * 5,
 		MaxIdleConnsPerHost: idleConnsPerHost,
 		Dial: (&net.Dialer{
 			Timeout:   30 * time.Second,

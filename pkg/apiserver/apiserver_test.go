@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -42,6 +43,7 @@ import (
 	"k8s.io/kubernetes/pkg/apiserver/filters"
 	"k8s.io/kubernetes/pkg/apiserver/request"
 	apiservertesting "k8s.io/kubernetes/pkg/apiserver/testing"
+	"k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/runtime"
@@ -51,6 +53,8 @@ import (
 	"k8s.io/kubernetes/pkg/watch/versioned"
 	"k8s.io/kubernetes/plugin/pkg/admission/admit"
 	"k8s.io/kubernetes/plugin/pkg/admission/deny"
+
+	clienttypedv1 "k8s.io/kubernetes/pkg/client/clientset_generated/release_1_5/typed/core/v1"
 
 	"github.com/emicklei/go-restful"
 )
@@ -3256,4 +3260,131 @@ func newTestRequestInfoResolver() *request.RequestInfoFactory {
 		APIPrefixes:          sets.NewString("api", "apis"),
 		GrouplessAPIPrefixes: sets.NewString("api"),
 	}
+}
+
+func TestAbuseServer(t *testing.T) {
+	server := os.Getenv("ABUSE_SERVER")
+	if len(server) == 0 {
+		t.Skip("ABUSE_SERVER is not set")
+	}
+	c := clienttypedv1.NewForConfigOrDie(&restclient.Config{
+		QPS:  10000,
+		Host: server,
+		ContentConfig: restclient.ContentConfig{
+			AcceptContentTypes: "application/vnd.kubernetes.protobuf",
+			ContentType:        "application/vnd.kubernetes.protobuf",
+		},
+	})
+
+	nodes := 400
+	listers := 20
+	iterations := 10000
+
+	for i := 0; i < nodes*6; i++ {
+		c.Nodes().Delete(fmt.Sprintf("node-%d", i), nil)
+		_, err := c.Nodes().Create(&v1.Node{
+			ObjectMeta: v1.ObjectMeta{
+				Name: fmt.Sprintf("node-%d", i),
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for k := 0; k < listers; k++ {
+		go func(lister int) {
+			for i := 0; i < iterations; i++ {
+				_, err := c.Nodes().List(v1.ListOptions{})
+				if err != nil {
+					fmt.Printf("[list:%d] error after %d: %v", k, i, err)
+					break
+				}
+				time.Sleep(time.Duration(50+lister) * time.Millisecond)
+			}
+		}(k)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(nodes - listers)
+
+	for j := 0; j < nodes-listers; j++ {
+		go func(node int) {
+			var lastCount int
+			for i := 0; i < iterations; i++ {
+				if i%100 == 0 {
+					fmt.Printf("[%d] iteration %d ...\n", node, i)
+				}
+				if i%20 == 0 {
+					_, err := c.Nodes().List(v1.ListOptions{})
+					if err != nil {
+						fmt.Printf("[%d] error after %d: %v\n", node, i, err)
+						break
+					}
+				}
+
+				r, err := c.Nodes().List(v1.ListOptions{
+					FieldSelector:   fmt.Sprintf("metadata.name=node-%d", node),
+					ResourceVersion: "0",
+				})
+				if err != nil {
+					fmt.Printf("[%d] error after %d: %v\n", node, i, err)
+					break
+				}
+				if len(r.Items) != 1 {
+					fmt.Printf("[%d] error after %d: unexpected list count\n", node, i)
+					break
+				}
+
+				n, err := c.Nodes().Get(fmt.Sprintf("node-%d", node))
+				if err != nil {
+					fmt.Printf("[%d] error after %d: %v\n", node, i, err)
+					break
+				}
+				if len(n.Status.Conditions) != lastCount {
+					fmt.Printf("[%d] worker set %d, read %d conditions\n", node, lastCount, len(n.Status.Conditions))
+					break
+				}
+				previousCount := lastCount
+				switch {
+				case i%4 == 0:
+					lastCount = 1
+					n.Status.Conditions = []v1.NodeCondition{
+						{
+							Type:   v1.NodeReady,
+							Status: v1.ConditionTrue,
+							Reason: "foo",
+						},
+					}
+				case i%4 == 1:
+					lastCount = 2
+					n.Status.Conditions = []v1.NodeCondition{
+						{
+							Type:   v1.NodeReady,
+							Status: v1.ConditionFalse,
+							Reason: "foo",
+						},
+						{
+							Type:   v1.NodeDiskPressure,
+							Status: v1.ConditionTrue,
+							Reason: "bar",
+						},
+					}
+				case i%4 == 1:
+					lastCount = 0
+					n.Status.Conditions = nil
+				}
+				if _, err := c.Nodes().UpdateStatus(n); err != nil {
+					if !apierrs.IsConflict(err) {
+						fmt.Printf("[%d] error after %d: %v\n", node, i, err)
+						break
+					}
+					lastCount = previousCount
+				}
+			}
+			wg.Done()
+			fmt.Printf("[%d] done\n", node)
+		}(j)
+	}
+	wg.Wait()
 }
