@@ -30,6 +30,7 @@ import (
 	"k8s.io/client-go/pkg/api/unversioned"
 	"k8s.io/client-go/pkg/api/v1"
 	"k8s.io/client-go/pkg/runtime"
+	"k8s.io/client-go/pkg/runtime/schema"
 	"k8s.io/client-go/pkg/runtime/serializer"
 	"k8s.io/client-go/pkg/version"
 	"k8s.io/client-go/rest"
@@ -69,10 +70,10 @@ type ServerResourcesInterface interface {
 	ServerResources() (map[string]*unversioned.APIResourceList, error)
 	// ServerPreferredResources returns the supported resources with the version preferred by the
 	// server.
-	ServerPreferredResources() ([]unversioned.GroupVersionResource, error)
+	ServerPreferredResources() ([]schema.GroupVersionResource, error)
 	// ServerPreferredNamespacedResources returns the supported namespaced resources with the
 	// version preferred by the server.
-	ServerPreferredNamespacedResources() ([]unversioned.GroupVersionResource, error)
+	ServerPreferredNamespacedResources() ([]schema.GroupVersionResource, error)
 }
 
 // ServerVersionInterface has a method for retrieving the server's version.
@@ -84,7 +85,7 @@ type ServerVersionInterface interface {
 // SwaggerSchemaInterface has a method to retrieve the swagger schema.
 type SwaggerSchemaInterface interface {
 	// SwaggerSchema retrieves and parses the swagger API schema the server supports.
-	SwaggerSchema(version unversioned.GroupVersion) (*swagger.ApiDeclaration, error)
+	SwaggerSchema(version schema.GroupVersion) (*swagger.ApiDeclaration, error)
 }
 
 // DiscoveryClient implements the functions that discover server-supported API groups,
@@ -186,7 +187,7 @@ func (d *DiscoveryClient) ServerResources() (map[string]*unversioned.APIResource
 // ErrGroupDiscoveryFailed is returned if one or more API groups fail to load.
 type ErrGroupDiscoveryFailed struct {
 	// Groups is a list of the groups that failed to load and the error cause
-	Groups map[unversioned.GroupVersion]error
+	Groups map[schema.GroupVersion]error
 }
 
 // Error implements the error interface
@@ -208,15 +209,15 @@ func IsGroupDiscoveryFailedError(err error) bool {
 
 // serverPreferredResources returns the supported resources with the version preferred by the
 // server. If namespaced is true, only namespaced resources will be returned.
-func (d *DiscoveryClient) serverPreferredResources(namespaced bool) ([]unversioned.GroupVersionResource, error) {
+func (d *DiscoveryClient) serverPreferredResources(namespaced bool) ([]schema.GroupVersionResource, error) {
 	// retry in case the groups supported by the server change after ServerGroup() returns.
 	const maxRetries = 2
-	var failedGroups map[unversioned.GroupVersion]error
-	var results []unversioned.GroupVersionResource
+	var failedGroups map[schema.GroupVersion]error
+	var results []schema.GroupVersionResource
 RetrieveGroups:
 	for i := 0; i < maxRetries; i++ {
-		results = []unversioned.GroupVersionResource{}
-		failedGroups = make(map[unversioned.GroupVersion]error)
+		results = []schema.GroupVersionResource{}
+		failedGroups = make(map[schema.GroupVersion]error)
 		serverGroupList, err := d.ServerGroups()
 		if err != nil {
 			return results, err
@@ -224,7 +225,7 @@ RetrieveGroups:
 
 		for _, apiGroup := range serverGroupList.Groups {
 			preferredVersion := apiGroup.PreferredVersion
-			groupVersion := unversioned.GroupVersion{Group: apiGroup.Name, Version: preferredVersion.Version}
+			groupVersion := schema.GroupVersion{Group: apiGroup.Name, Version: preferredVersion.Version}
 			apiResourceList, err := d.ServerResourcesForGroupVersion(preferredVersion.GroupVersion)
 			if err != nil {
 				if i < maxRetries-1 {
@@ -253,13 +254,13 @@ RetrieveGroups:
 
 // ServerPreferredResources returns the supported resources with the version preferred by the
 // server.
-func (d *DiscoveryClient) ServerPreferredResources() ([]unversioned.GroupVersionResource, error) {
+func (d *DiscoveryClient) ServerPreferredResources() ([]schema.GroupVersionResource, error) {
 	return d.serverPreferredResources(false)
 }
 
 // ServerPreferredNamespacedResources returns the supported namespaced resources with the
 // version preferred by the server.
-func (d *DiscoveryClient) ServerPreferredNamespacedResources() ([]unversioned.GroupVersionResource, error) {
+func (d *DiscoveryClient) ServerPreferredNamespacedResources() ([]schema.GroupVersionResource, error) {
 	return d.serverPreferredResources(true)
 }
 
@@ -278,7 +279,7 @@ func (d *DiscoveryClient) ServerVersion() (*version.Info, error) {
 }
 
 // SwaggerSchema retrieves and parses the swagger API schema the server supports.
-func (d *DiscoveryClient) SwaggerSchema(version unversioned.GroupVersion) (*swagger.ApiDeclaration, error) {
+func (d *DiscoveryClient) SwaggerSchema(version schema.GroupVersion) (*swagger.ApiDeclaration, error) {
 	if version.Empty() {
 		return nil, fmt.Errorf("groupVersion cannot be empty")
 	}

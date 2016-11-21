@@ -27,6 +27,7 @@ import (
 
 	"k8s.io/client-go/pkg/api/unversioned"
 	"k8s.io/client-go/pkg/api/v1"
+	"k8s.io/client-go/pkg/runtime/schema"
 	"k8s.io/client-go/pkg/version"
 	"k8s.io/client-go/rest"
 )
@@ -312,7 +313,7 @@ func TestGetSwaggerSchemaFail(t *testing.T) {
 	defer server.Close()
 
 	client := NewDiscoveryClientForConfigOrDie(&rest.Config{Host: server.URL})
-	got, err := client.SwaggerSchema(unversioned.GroupVersion{Group: "api.group", Version: "v4"})
+	got, err := client.SwaggerSchema(schema.GroupVersion{Group: "api.group", Version: "v4"})
 	if got != nil {
 		t.Fatalf("unexpected response: %v", got)
 	}
