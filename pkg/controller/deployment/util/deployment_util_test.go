@@ -129,8 +129,8 @@ func generatePod(labels map[string]string, image string) v1.Pod {
 
 func generateRSWithLabel(labels map[string]string, image string) extensions.ReplicaSet {
 	return extensions.ReplicaSet{
-		ObjectMeta: v1.ObjectMeta{
-			Name:   v1.SimpleNameGenerator.GenerateName("replicaset"),
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   api.SimpleNameGenerator.GenerateName("replicaset"),
 			Labels: labels,
 		},
 		Spec: extensions.ReplicaSetSpec{
@@ -159,8 +159,8 @@ func generateRSWithLabel(labels map[string]string, image string) extensions.Repl
 func generateRS(deployment extensions.Deployment) extensions.ReplicaSet {
 	template := GetNewReplicaSetTemplate(&deployment)
 	return extensions.ReplicaSet{
-		ObjectMeta: v1.ObjectMeta{
-			Name:   v1.SimpleNameGenerator.GenerateName("replicaset"),
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   api.SimpleNameGenerator.GenerateName("replicaset"),
 			Labels: template.Labels,
 		},
 		Spec: extensions.ReplicaSetSpec{

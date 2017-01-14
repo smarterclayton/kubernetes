@@ -25,8 +25,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	clientset "k8s.io/kubernetes/federation/client/clientset_generated/federation_clientset/typed/core/v1"
+	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/api/v1"
 	api_v1 "k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/test/e2e/framework"
 
@@ -111,8 +111,8 @@ var _ = framework.KubeDescribe("Federation namespace [Feature:Federation]", func
 
 			// Create resources in the namespace.
 			event := api_v1.Event{
-				ObjectMeta: api_v1.ObjectMeta{
-					Name:      v1.SimpleNameGenerator.GenerateName(eventNamePrefix),
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      api.SimpleNameGenerator.GenerateName(eventNamePrefix),
 					Namespace: nsName,
 				},
 				InvolvedObject: api_v1.ObjectReference{
@@ -185,8 +185,8 @@ func verifyNsCascadingDeletion(nsClient clientset.NamespaceInterface, clusters m
 
 func createNamespace(nsClient clientset.NamespaceInterface) string {
 	ns := api_v1.Namespace{
-		ObjectMeta: api_v1.ObjectMeta{
-			Name: v1.SimpleNameGenerator.GenerateName(namespacePrefix),
+		ObjectMeta: metav1.ObjectMeta{
+			Name: api.SimpleNameGenerator.GenerateName(namespacePrefix),
 		},
 	}
 	By(fmt.Sprintf("Creating namespace %s", ns.Name))

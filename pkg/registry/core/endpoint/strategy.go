@@ -19,6 +19,7 @@ package endpoint
 import (
 	"fmt"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -34,7 +35,7 @@ import (
 // endpointsStrategy implements behavior for Endpoints
 type endpointsStrategy struct {
 	runtime.ObjectTyper
-	api.NameGenerator
+	metav1.NameGenerator
 }
 
 // Strategy is the default logic that applies when creating and updating Endpoint

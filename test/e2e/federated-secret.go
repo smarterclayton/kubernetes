@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	fedclientset "k8s.io/kubernetes/federation/client/clientset_generated/federation_clientset"
 	"k8s.io/kubernetes/federation/pkg/federation-controller/util"
+	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/api/v1"
 	kubeclientset "k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
@@ -155,8 +156,8 @@ func createSecretOrFail(clientset *fedclientset.Clientset, nsName string) *v1.Se
 	}
 
 	secret := &v1.Secret{
-		ObjectMeta: v1.ObjectMeta{
-			Name:      v1.SimpleNameGenerator.GenerateName(secretNamePrefix),
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      api.SimpleNameGenerator.GenerateName(secretNamePrefix),
 			Namespace: nsName,
 		},
 	}

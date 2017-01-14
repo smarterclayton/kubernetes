@@ -35,7 +35,7 @@ type RESTCreateStrategy interface {
 	runtime.ObjectTyper
 	// The name generate is used when the standard GenerateName field is set.
 	// The NameGenerator will be invoked prior to validation.
-	api.NameGenerator
+	metav1.NameGenerator
 
 	// NamespaceScoped returns true if the object must be within a namespace.
 	NamespaceScoped() bool
@@ -72,7 +72,7 @@ func BeforeCreate(strategy RESTCreateStrategy, ctx genericapirequest.Context, ob
 	objectMeta.DeletionGracePeriodSeconds = nil
 	strategy.PrepareForCreate(ctx, obj)
 	FillObjectMetaSystemFields(ctx, objectMeta)
-	api.GenerateName(strategy, objectMeta)
+	metav1.GenerateName(strategy, objectMeta)
 
 	// ClusterName is ignored and should not be saved
 	objectMeta.ClusterName = ""

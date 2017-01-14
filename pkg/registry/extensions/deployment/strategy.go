@@ -39,7 +39,7 @@ import (
 // deploymentStrategy implements behavior for Deployments.
 type deploymentStrategy struct {
 	runtime.ObjectTyper
-	api.NameGenerator
+	metav1.NameGenerator
 }
 
 // Strategy is the default logic that applies when creating and updating Deployment

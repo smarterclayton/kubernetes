@@ -45,7 +45,7 @@ import (
 // podStrategy implements behavior for Pods
 type podStrategy struct {
 	runtime.ObjectTyper
-	api.NameGenerator
+	metav1.NameGenerator
 }
 
 // Strategy is the default logic that applies when creating and updating Pod

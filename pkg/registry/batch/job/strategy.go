@@ -36,7 +36,7 @@ import (
 // jobStrategy implements verification logic for Replication Controllers.
 type jobStrategy struct {
 	runtime.ObjectTyper
-	api.NameGenerator
+	metav1.NameGenerator
 }
 
 // Strategy is the default logic that applies when creating and updating Replication Controller objects.

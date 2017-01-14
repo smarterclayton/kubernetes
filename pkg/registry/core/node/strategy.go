@@ -41,7 +41,7 @@ import (
 // nodeStrategy implements behavior for nodes
 type nodeStrategy struct {
 	runtime.ObjectTyper
-	api.NameGenerator
+	metav1.NameGenerator
 }
 
 // Nodes is the default logic that applies when creating and updating Node

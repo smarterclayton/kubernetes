@@ -68,7 +68,7 @@ func (t *testOrphanDeleteStrategy) DefaultGarbageCollectionPolicy() rest.Garbage
 
 type testRESTStrategy struct {
 	runtime.ObjectTyper
-	api.NameGenerator
+	metav1.NameGenerator
 	namespaceScoped          bool
 	allowCreateOnUpdate      bool
 	allowUnconditionalUpdate bool
