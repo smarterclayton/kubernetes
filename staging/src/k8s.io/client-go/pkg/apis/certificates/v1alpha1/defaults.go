@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors.
+Copyright 2017 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,23 +14,18 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package conversion
+package v1alpha1
 
-import (
-	"k8s.io/apimachinery/third_party/forked/golang/reflect"
-)
+import "k8s.io/apimachinery/pkg/runtime"
 
-// The code for this type must be located in third_party, since it forks from
-// go std lib. But for convenience, we expose the type here, too.
-type Equalities struct {
-	reflect.Equalities
+func addDefaultingFuncs(scheme *runtime.Scheme) error {
+	RegisterDefaults(scheme)
+	return scheme.AddDefaultingFuncs(
+		SetDefaults_CertificateSigningRequestSpec,
+	)
 }
-
-// For convenience, panics on errors
-func EqualitiesOrDie(funcs ...interface{}) Equalities {
-	e := Equalities{reflect.Equalities{}}
-	if err := e.AddFuncs(funcs...); err != nil {
-		panic(err)
+func SetDefaults_CertificateSigningRequestSpec(obj *CertificateSigningRequestSpec) {
+	if obj.Usages == nil {
+		obj.Usages = []KeyUsage{UsageDigitalSignature, UsageKeyEncipherment}
 	}
-	return e
 }
