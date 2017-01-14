@@ -39,7 +39,6 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/rest"
-	apiv1 "k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/genericapiserver/api/handlers"
 	apitesting "k8s.io/kubernetes/pkg/genericapiserver/api/testing"
@@ -68,18 +67,18 @@ var watchTestTable = []struct {
 	t   watch.EventType
 	obj runtime.Object
 }{
-	{watch.Added, &apitesting.Simple{ObjectMeta: apiv1.ObjectMeta{Name: "foo"}}},
-	{watch.Modified, &apitesting.Simple{ObjectMeta: apiv1.ObjectMeta{Name: "bar"}}},
-	{watch.Deleted, &apitesting.Simple{ObjectMeta: apiv1.ObjectMeta{Name: "bar"}}},
+	{watch.Added, &apitesting.Simple{ObjectMeta: metav1.ObjectMeta{Name: "foo"}}},
+	{watch.Modified, &apitesting.Simple{ObjectMeta: metav1.ObjectMeta{Name: "bar"}}},
+	{watch.Deleted, &apitesting.Simple{ObjectMeta: metav1.ObjectMeta{Name: "bar"}}},
 }
 
 var podWatchTestTable = []struct {
 	t   watch.EventType
 	obj runtime.Object
 }{
-	{watch.Added, roundTripOrDie(codec, &api.Pod{ObjectMeta: api.ObjectMeta{Name: "foo"}})},
-	{watch.Modified, roundTripOrDie(codec, &api.Pod{ObjectMeta: api.ObjectMeta{Name: "bar"}})},
-	{watch.Deleted, roundTripOrDie(codec, &api.Pod{ObjectMeta: api.ObjectMeta{Name: "bar"}})},
+	{watch.Added, roundTripOrDie(codec, &api.Pod{ObjectMeta: metav1.ObjectMeta{Name: "foo"}})},
+	{watch.Modified, roundTripOrDie(codec, &api.Pod{ObjectMeta: metav1.ObjectMeta{Name: "bar"}})},
+	{watch.Deleted, roundTripOrDie(codec, &api.Pod{ObjectMeta: metav1.ObjectMeta{Name: "bar"}})},
 }
 
 func TestWatchWebsocket(t *testing.T) {

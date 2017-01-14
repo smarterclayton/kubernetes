@@ -19,7 +19,7 @@ limitations under the License.
 package internalversion
 
 import (
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	api "k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/errors"
@@ -55,7 +55,7 @@ func (s *persistentVolumeLister) List(selector labels.Selector) (ret []*api.Pers
 
 // Get retrieves the PersistentVolume from the index for a given name.
 func (s *persistentVolumeLister) Get(name string) (*api.PersistentVolume, error) {
-	key := &api.PersistentVolume{ObjectMeta: api.ObjectMeta{Name: name}}
+	key := &api.PersistentVolume{ObjectMeta: v1.ObjectMeta{Name: name}}
 	obj, exists, err := s.indexer.Get(key)
 	if err != nil {
 		return nil, err

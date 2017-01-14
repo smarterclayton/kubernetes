@@ -19,7 +19,7 @@ limitations under the License.
 package internalversion
 
 import (
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	api "k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/errors"
@@ -55,7 +55,7 @@ func (s *namespaceLister) List(selector labels.Selector) (ret []*api.Namespace, 
 
 // Get retrieves the Namespace from the index for a given name.
 func (s *namespaceLister) Get(name string) (*api.Namespace, error) {
-	key := &api.Namespace{ObjectMeta: api.ObjectMeta{Name: name}}
+	key := &api.Namespace{ObjectMeta: v1.ObjectMeta{Name: name}}
 	obj, exists, err := s.indexer.Get(key)
 	if err != nil {
 		return nil, err

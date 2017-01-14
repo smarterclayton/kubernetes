@@ -9983,6 +9983,7 @@ go_library(
     name = "k8s.io/client-go/pkg/apis/certificates/v1alpha1",
     srcs = [
         "k8s.io/client-go/pkg/apis/certificates/v1alpha1/conversion.go",
+        "k8s.io/client-go/pkg/apis/certificates/v1alpha1/defaults.go",
         "k8s.io/client-go/pkg/apis/certificates/v1alpha1/doc.go",
         "k8s.io/client-go/pkg/apis/certificates/v1alpha1/generated.pb.go",
         "k8s.io/client-go/pkg/apis/certificates/v1alpha1/register.go",
@@ -11069,6 +11070,7 @@ go_test(
     library = ":k8s.io/client-go/tools/cache/testing",
     tags = ["automanaged"],
     deps = [
+        "//vendor:k8s.io/apimachinery/pkg/apis/meta/v1",
         "//vendor:k8s.io/apimachinery/pkg/watch",
         "//vendor:k8s.io/client-go/pkg/api",
         "//vendor:k8s.io/client-go/pkg/api/v1",
@@ -11081,6 +11083,7 @@ go_library(
     tags = ["automanaged"],
     deps = [
         "//vendor:k8s.io/apimachinery/pkg/api/meta",
+        "//vendor:k8s.io/apimachinery/pkg/apis/meta/v1",
         "//vendor:k8s.io/apimachinery/pkg/runtime",
         "//vendor:k8s.io/apimachinery/pkg/types",
         "//vendor:k8s.io/apimachinery/pkg/watch",
@@ -11820,6 +11823,7 @@ go_test(
     name = "k8s.io/apimachinery/pkg/apis/meta/v1_test",
     srcs = [
         "k8s.io/apimachinery/pkg/apis/meta/v1/duration_test.go",
+        "k8s.io/apimachinery/pkg/apis/meta/v1/generate_test.go",
         "k8s.io/apimachinery/pkg/apis/meta/v1/group_version_test.go",
         "k8s.io/apimachinery/pkg/apis/meta/v1/helpers_test.go",
         "k8s.io/apimachinery/pkg/apis/meta/v1/time_test.go",
@@ -11839,6 +11843,7 @@ go_library(
     srcs = [
         "k8s.io/apimachinery/pkg/apis/meta/v1/doc.go",
         "k8s.io/apimachinery/pkg/apis/meta/v1/duration.go",
+        "k8s.io/apimachinery/pkg/apis/meta/v1/generate.go",
         "k8s.io/apimachinery/pkg/apis/meta/v1/generated.pb.go",
         "k8s.io/apimachinery/pkg/apis/meta/v1/group_version.go",
         "k8s.io/apimachinery/pkg/apis/meta/v1/helpers.go",
@@ -13110,15 +13115,6 @@ go_library(
         "//vendor:k8s.io/apimachinery/pkg/util/runtime",
         "//vendor:k8s.io/apimachinery/pkg/util/wait",
     ],
-)
-
-go_library(
-    name = "k8s.io/client-go/_vendor/k8s.io/apimachinery/third_party/forked/golang/reflect",
-    srcs = [
-        "k8s.io/client-go/_vendor/k8s.io/apimachinery/third_party/forked/golang/reflect/deep_equal.go",
-        "k8s.io/client-go/_vendor/k8s.io/apimachinery/third_party/forked/golang/reflect/type.go",
-    ],
-    tags = ["automanaged"],
 )
 
 go_library(
