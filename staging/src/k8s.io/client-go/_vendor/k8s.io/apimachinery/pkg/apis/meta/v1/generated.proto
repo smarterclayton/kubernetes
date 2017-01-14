@@ -21,9 +21,9 @@ syntax = 'proto2';
 
 package k8s.io.kubernetes.pkg.apis.meta.v1;
 
-import "k8s.io/kubernetes/pkg/runtime/generated.proto";
-import "k8s.io/kubernetes/pkg/runtime/schema/generated.proto";
-import "k8s.io/kubernetes/pkg/util/intstr/generated.proto";
+import "k8s.io/apimachinery/pkg/runtime/generated.proto";
+import "k8s.io/apimachinery/pkg/runtime/schema/generated.proto";
+import "k8s.io/apimachinery/pkg/util/intstr/generated.proto";
 
 // Package-wide variables from generator "generated".
 option go_package = "v1";
@@ -88,7 +88,7 @@ message APIResourceList {
 
 // APIVersions lists the versions that are available, to allow clients to
 // discover the API at /api, which is the root path of the legacy v1 API.
-// 
+//
 // +protobuf.options.(gogoproto.goproto_stringer)=false
 message APIVersions {
   // versions are the api versions that are available.
@@ -131,7 +131,7 @@ message GetOptions {
 
 // GroupKind specifies a Group and a Kind, but does not force a version.  This is useful for identifying
 // concepts during lookup stages without having partially valid types
-// 
+//
 // +protobuf.options.(gogoproto.goproto_stringer)=false
 message GroupKind {
   optional string group = 1;
@@ -141,7 +141,7 @@ message GroupKind {
 
 // GroupResource specifies a Group and a Resource, but does not force a version.  This is useful for identifying
 // concepts during lookup stages without having partially valid types
-// 
+//
 // +protobuf.options.(gogoproto.goproto_stringer)=false
 message GroupResource {
   optional string group = 1;
@@ -150,7 +150,7 @@ message GroupResource {
 }
 
 // GroupVersion contains the "group" and the "version", which uniquely identifies the API.
-// 
+//
 // +protobuf.options.(gogoproto.goproto_stringer)=false
 message GroupVersion {
   optional string group = 1;
@@ -171,7 +171,7 @@ message GroupVersionForDiscovery {
 
 // GroupVersionKind unambiguously identifies a kind.  It doesn't anonymously include GroupVersion
 // to avoid automatic coersion.  It doesn't use a GroupVersion to avoid custom marshalling
-// 
+//
 // +protobuf.options.(gogoproto.goproto_stringer)=false
 message GroupVersionKind {
   optional string group = 1;
@@ -183,7 +183,7 @@ message GroupVersionKind {
 
 // GroupVersionResource unambiguously identifies a resource.  It doesn't anonymously include GroupVersion
 // to avoid automatic coersion.  It doesn't use a GroupVersion to avoid custom marshalling
-// 
+//
 // +protobuf.options.(gogoproto.goproto_stringer)=false
 message GroupVersionResource {
   optional string group = 1;
@@ -340,7 +340,7 @@ message StatusCause {
   // Arrays are zero-indexed.  Fields may appear more than once in an array of
   // causes due to fields having multiple errors.
   // Optional.
-  // 
+  //
   // Examples:
   //   "name" - the field "name" on the current resource
   //   "items[0].name" - the field "name" on the first array entry in "items"
@@ -383,7 +383,7 @@ message StatusDetails {
 // Time is a wrapper around time.Time which supports correct
 // marshaling to YAML and JSON.  Wrappers are provided for many
 // of the factory methods that the time package offers.
-// 
+//
 // +protobuf.options.marshal=false
 // +protobuf.as=Timestamp
 // +protobuf.options.(gogoproto.goproto_stringer)=false
@@ -437,7 +437,7 @@ message TypeMeta {
 }
 
 // Verbs masks the value so protobuf can generate
-// 
+//
 // +protobuf.nullable=true
 // +protobuf.options.(gogoproto.goproto_stringer)=false
 message Verbs {
@@ -447,7 +447,7 @@ message Verbs {
 }
 
 // Event represents a single event to a watched resource.
-// 
+//
 // +protobuf=true
 message WatchEvent {
   optional string type = 1;

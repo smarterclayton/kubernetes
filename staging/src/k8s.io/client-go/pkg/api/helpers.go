@@ -24,6 +24,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/davecgh/go-spew/spew"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/conversion"
 	"k8s.io/apimachinery/pkg/labels"
@@ -33,8 +35,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/pkg/api/resource"
 	"k8s.io/client-go/pkg/fields"
-
-	"github.com/davecgh/go-spew/spew"
 )
 
 // Conversion error conveniently packages up errors in conversions.
@@ -272,7 +272,7 @@ func IsStandardFinalizerName(str string) bool {
 }
 
 // SingleObject returns a ListOptions for watching a single object.
-func SingleObject(meta ObjectMeta) ListOptions {
+func SingleObject(meta metav1.ObjectMeta) ListOptions {
 	return ListOptions{
 		FieldSelector:   fields.OneTermEqualSelector("metadata.name", meta.Name),
 		ResourceVersion: meta.ResourceVersion,
@@ -485,20 +485,6 @@ const (
 	// will fail to launch.
 	UnsafeSysctlsPodAnnotationKey string = "security.alpha.kubernetes.io/unsafe-sysctls"
 )
-
-// GetAffinityFromPod gets the json serialized affinity data from Pod.Annotations
-// and converts it to the Affinity type in api.
-func GetAffinityFromPodAnnotations(annotations map[string]string) (*Affinity, error) {
-	if len(annotations) > 0 && annotations[AffinityAnnotationKey] != "" {
-		var affinity Affinity
-		err := json.Unmarshal([]byte(annotations[AffinityAnnotationKey]), &affinity)
-		if err != nil {
-			return nil, err
-		}
-		return &affinity, nil
-	}
-	return nil, nil
-}
 
 // GetTolerationsFromPodAnnotations gets the json serialized tolerations data from Pod.Annotations
 // and converts it to the []Toleration type in api.
