@@ -46,6 +46,8 @@ filegroup(
         "//hack:all-srcs",
         "//pkg:all-srcs",
         "//plugin:all-srcs",
+        "//staging/src/k8s.io/apimachinery/pkg/util/cache:all-srcs",
+        "//staging/src/k8s.io/apimachinery/pkg/util/clock:all-srcs",
         "//test:all-srcs",
         "//third_party:all-srcs",
         "//vendor:all-srcs",
