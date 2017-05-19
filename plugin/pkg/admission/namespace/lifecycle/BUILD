@@ -22,9 +22,9 @@ go_library(
         "//vendor:k8s.io/apimachinery/pkg/api/errors",
         "//vendor:k8s.io/apimachinery/pkg/apis/meta/v1",
         "//vendor:k8s.io/apimachinery/pkg/runtime/schema",
+        "//vendor:k8s.io/apimachinery/pkg/util/cache",
         "//vendor:k8s.io/apimachinery/pkg/util/sets",
         "//vendor:k8s.io/apiserver/pkg/admission",
-        "//vendor:k8s.io/apiserver/pkg/util/cache",
         "//vendor:k8s.io/client-go/util/clock",
     ],
 )
