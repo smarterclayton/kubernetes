@@ -36,7 +36,6 @@ import (
 	informers "k8s.io/kubernetes/pkg/client/informers/informers_generated/externalversions/core/v1"
 	listersv1 "k8s.io/kubernetes/pkg/client/listers/core/v1"
 	clientretry "k8s.io/kubernetes/pkg/client/retry"
-	"k8s.io/kubernetes/pkg/controller"
 	"k8s.io/kubernetes/pkg/registry/core/secret"
 	"k8s.io/kubernetes/pkg/serviceaccount"
 	"k8s.io/kubernetes/pkg/util/metrics"
@@ -174,7 +173,7 @@ func (e *TokensController) Run(workers int, stopCh <-chan struct{}) {
 	defer e.syncServiceAccountQueue.ShutDown()
 	defer e.syncSecretQueue.ShutDown()
 
-	if !controller.WaitForCacheSync("tokens", stopCh, e.serviceAccountSynced, e.secretSynced) {
+	if !cache.WaitForCacheSync(stopCh, e.serviceAccountSynced, e.secretSynced) {
 		return
 	}
 
