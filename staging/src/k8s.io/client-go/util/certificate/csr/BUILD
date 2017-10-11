@@ -10,7 +10,6 @@ go_library(
     name = "go_default_library",
     srcs = ["csr.go"],
     deps = [
-        "//pkg/apis/certificates/v1beta1:go_default_library",
         "//vendor/github.com/golang/glog:go_default_library",
         "//vendor/k8s.io/api/certificates/v1beta1:go_default_library",
         "//vendor/k8s.io/apimachinery/pkg/api/errors:go_default_library",
