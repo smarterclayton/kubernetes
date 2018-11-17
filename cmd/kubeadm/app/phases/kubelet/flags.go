@@ -65,7 +65,7 @@ func WriteKubeletDynamicEnvFile(cfg *kubeadmapi.InitConfiguration, registerTaint
 	stringMap := buildKubeletArgMap(flagOpts)
 	argList := kubeadmutil.BuildArgumentListFromMap(stringMap, cfg.NodeRegistration.KubeletExtraArgs)
 	envFileContent := fmt.Sprintf("%s=%s\n", constants.KubeletEnvFileVariableName, strings.Join(argList, " "))
-
+	klog.Infof("DEBUG: envFileContent:\n%s", envFileContent)
 	return writeKubeletFlagBytesToDisk([]byte(envFileContent), kubeletDir)
 }
 
@@ -110,6 +110,8 @@ func buildKubeletArgMap(opts kubeletFlagsOpts) map[string]string {
 		klog.V(1).Infof("setting kubelet hostname-override to %q", opts.nodeRegOpts.Name)
 		kubeletFlags["hostname-override"] = opts.nodeRegOpts.Name
 	}
+
+	kubeletFlags["v"] = "6"
 
 	// TODO: Conditionally set `--cgroup-driver` to either `systemd` or `cgroupfs` for CRI other than Docker
 

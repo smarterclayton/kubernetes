@@ -739,10 +739,13 @@ func run(s *options.KubeletServer, kubeDeps *kubelet.Dependencies, stopCh <-chan
 // bootstrapping is enabled or client certificate rotation is enabled.
 func buildKubeletClientConfig(s *options.KubeletServer, nodeName types.NodeName) (*restclient.Config, func(), error) {
 	if s.RotateCertificates && utilfeature.DefaultFeatureGate.Enabled(features.RotateKubeletClientCertificate) {
+		klog.Infof("Client rotation is on, will bootstrap in background")
 		certConfig, clientConfig, err := bootstrap.LoadClientConfig(s.KubeConfig, s.BootstrapKubeconfig, s.CertDirectory)
 		if err != nil {
 			return nil, nil, err
 		}
+		klog.Infof("DEBUG: bootstrap config:\n%#v", certConfig)
+		klog.Infof("DEBUG: client config:\n%#v", clientConfig)
 
 		clientCertificateManager, err := buildClientCertificateManager(certConfig, clientConfig, s.CertDirectory, nodeName)
 		if err != nil {
@@ -753,6 +756,8 @@ func buildKubeletClientConfig(s *options.KubeletServer, nodeName types.NodeName)
 		transportConfig := restclient.CopyConfig(clientConfig)
 		transportConfig.CertFile = ""
 		transportConfig.KeyFile = ""
+		transportConfig.CertData = ""
+		transportConfig.KeyData = ""
 
 		// we set exitAfter to five minutes because we use this client configuration to request new certs - if we are unable
 		// to request new certs, we will be unable to continue normal operation. Exiting the process allows a wrapper
@@ -792,7 +797,10 @@ func buildClientCertificateManager(certConfig, clientConfig *restclient.Config, 
 		// provided by a fundamental trust system like cloud VM identity or an HSM module.
 		config := certConfig
 		if current != nil {
+			klog.Infof("DEBUG: using client config:\n%#v", clientConfig)
 			config = clientConfig
+		} else {
+			klog.Infof("DEBUG: using cert config:\n%#v", clientConfig)
 		}
 		client, err := clientset.NewForConfig(config)
 		if err != nil {

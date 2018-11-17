@@ -421,6 +421,8 @@ func (m *manager) rotateCerts() (bool, error) {
 		return false, nil
 	}
 
+	klog.Infof("DEBUG: got certificate: expires %s, cn=%s", cert.Leaf.NotAfter, cert.Leaf.Subject.CommonName)
+
 	m.updateCached(cert)
 	return true, nil
 }
