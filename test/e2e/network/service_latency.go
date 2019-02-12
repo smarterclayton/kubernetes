@@ -77,9 +77,12 @@ var _ = SIGDescribe("Service endpoints latency", func() {
 		)
 
 		// Turn off rate limiting--it interferes with our measurements.
-		oldThrottle := f.ClientSet.CoreV1().RESTClient().GetRateLimiter()
-		f.ClientSet.CoreV1().RESTClient().(*restclient.RESTClient).Throttle = flowcontrol.NewFakeAlwaysRateLimiter()
-		defer func() { f.ClientSet.CoreV1().RESTClient().(*restclient.RESTClient).Throttle = oldThrottle }()
+		cfg, err := framework.LoadConfig()
+		if err != nil {
+			framework.Failf("Unable to load config: %v", err)
+		}
+		cfg.RateLimiter = flowcontrol.NewFakeAlwaysRateLimiter()
+		f.ClientSet = kubernetes.NewForConfigOrDie(cfg)
 
 		failing := sets.NewString()
 		d, err := runServiceLatencies(f, parallelTrials, totalTrials, acceptableFailureRatio)
