@@ -42,7 +42,6 @@ type WantsQuotaConfiguration interface {
 
 // PluginInitializer is used for initialization of the Kubernetes specific admission plugins.
 type PluginInitializer struct {
-	cloudConfig        []byte
 	restMapper         meta.RESTMapper
 	quotaConfiguration quota.Configuration
 }
@@ -53,12 +52,10 @@ var _ admission.PluginInitializer = &PluginInitializer{}
 // TODO: switch these parameters to use the builder pattern or just make them
 // all public, this construction method is pointless boilerplate.
 func NewPluginInitializer(
-	cloudConfig []byte,
 	restMapper meta.RESTMapper,
 	quotaConfiguration quota.Configuration,
 ) *PluginInitializer {
 	return &PluginInitializer{
-		cloudConfig:        cloudConfig,
 		restMapper:         restMapper,
 		quotaConfiguration: quotaConfiguration,
 	}
@@ -67,10 +64,6 @@ func NewPluginInitializer(
 // Initialize checks the initialization interfaces implemented by each plugin
 // and provide the appropriate initialization data
 func (i *PluginInitializer) Initialize(plugin admission.Interface) {
-	if wants, ok := plugin.(WantsCloudConfig); ok {
-		wants.SetCloudConfig(i.cloudConfig)
-	}
-
 	if wants, ok := plugin.(WantsRESTMapper); ok {
 		wants.SetRESTMapper(i.restMapper)
 	}
