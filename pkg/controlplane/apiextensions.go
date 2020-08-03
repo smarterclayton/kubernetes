@@ -34,7 +34,7 @@ import (
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/apiserver/pkg/util/webhook"
 	kubeexternalinformers "k8s.io/client-go/informers"
-	"k8s.io/kubernetes/cmd/kube-apiserver/app/options"
+	"k8s.io/kubernetes/pkg/controlplane/options"
 )
 
 func createAPIExtensionsConfig(
@@ -42,7 +42,6 @@ func createAPIExtensionsConfig(
 	externalInformers kubeexternalinformers.SharedInformerFactory,
 	pluginInitializers []admission.PluginInitializer,
 	commandOptions *options.ServerRunOptions,
-	masterCount int,
 	serviceResolver webhook.ServiceResolver,
 	authResolverWrapper webhook.AuthenticationInfoResolverWrapper,
 ) (*apiextensionsapiserver.Config, error) {
@@ -86,7 +85,7 @@ func createAPIExtensionsConfig(
 		},
 		ExtraConfig: apiextensionsapiserver.ExtraConfig{
 			CRDRESTOptionsGetter: apiextensionsoptions.NewCRDRESTOptionsGetter(etcdOptions),
-			MasterCount:          masterCount,
+			MasterCount:          3,
 			AuthResolverWrapper:  authResolverWrapper,
 			ServiceResolver:      serviceResolver,
 		},
