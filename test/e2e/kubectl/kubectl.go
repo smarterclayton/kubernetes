@@ -1209,7 +1209,7 @@ metadata:
 		ginkgo.It("should check if kubectl describe prints relevant information for cronjob", func() {
 			ginkgo.By("creating a cronjob")
 			nsFlag := fmt.Sprintf("--namespace=%v", ns)
-			cronjobYaml := commonutils.SubstituteImageName(string(readTestFileOrDie("busybox-cronjob.yaml")))
+			cronjobYaml := commonutils.SubstituteImageName(string(readTestFileOrDie("busybox-cronjob.yaml.in")))
 			framework.RunKubectlOrDieInput(ns, cronjobYaml, "create", "-f", "-", nsFlag)
 
 			ginkgo.By("waiting for cronjob to start.")
@@ -1374,7 +1374,7 @@ metadata:
 		ginkgo.BeforeEach(func() {
 			ginkgo.By("creating the pod")
 			nsFlag = fmt.Sprintf("--namespace=%v", ns)
-			podYaml = commonutils.SubstituteImageName(string(readTestFileOrDie("busybox-pod.yaml")))
+			podYaml = commonutils.SubstituteImageName(string(readTestFileOrDie("busybox-pod.yaml.in")))
 			framework.RunKubectlOrDieInput(ns, podYaml, "create", "-f", "-", nsFlag)
 			framework.ExpectEqual(e2epod.CheckPodsRunningReady(c, ns, []string{busyboxPodName}, framework.PodStartTimeout), true)
 		})
