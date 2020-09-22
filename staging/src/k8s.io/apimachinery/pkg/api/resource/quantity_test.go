@@ -18,6 +18,8 @@ package resource
 
 import (
 	"encoding/json"
+	fmt "fmt"
+	math "math"
 	"math/rand"
 	"strings"
 	"testing"
@@ -1177,6 +1179,183 @@ func TestNegateRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestQuantityAsApproximateFloat64(t *testing.T) {
+	table := []struct {
+		in  Quantity
+		out float64
+	}{
+		{decQuantity(0, 0, DecimalSI), 0.0},
+		{decQuantity(0, 0, DecimalExponent), 0.0},
+		{decQuantity(0, 0, BinarySI), 0.0},
+
+		{decQuantity(1, 0, DecimalSI), 1},
+		{decQuantity(1, 0, DecimalExponent), 1},
+		{decQuantity(1, 0, BinarySI), 1},
+
+		// Binary suffixes
+		{decQuantity(1024, 0, BinarySI), 1024},
+		{decQuantity(8*1024, 0, BinarySI), 8 * 1024},
+		{decQuantity(7*1024*1024, 0, BinarySI), 7 * 1024 * 1024},
+		{decQuantity(7*1024*1024, 1, BinarySI), (7 * 1024 * 1024) * 1024},
+		{decQuantity(7*1024*1024, 4, BinarySI), (7 * 1024 * 1024) * (1024 * 1024 * 1024 * 1024)},
+		{decQuantity(7*1024*1024, 8, BinarySI), (7 * 1024 * 1024) * (1024 * 1024 * 1024 * 1024 * 1024 * 1024 * 1024 * 1024)},
+		{decQuantity(7*1024*1024, -1, BinarySI), (7 * 1024 * 1024) / float64(1024)},
+		{decQuantity(7*1024*1024, -8, BinarySI), (7 * 1024 * 1024) / float64(1024*1024*1024*1024*1024*1024*1024*1024)},
+
+		{decQuantity(1024, 0, DecimalSI), 1024},
+		{decQuantity(8*1024, 0, DecimalSI), 8 * 1024},
+		{decQuantity(7*1024*1024, 0, DecimalSI), 7 * 1024 * 1024},
+		{decQuantity(7*1024*1024, 1, DecimalSI), (7 * 1024 * 1024) * 10},
+		{decQuantity(7*1024*1024, 4, DecimalSI), (7 * 1024 * 1024) * 10000},
+		{decQuantity(7*1024*1024, 8, DecimalSI), (7 * 1024 * 1024) * 100000000},
+		{decQuantity(7*1024*1024, -1, DecimalSI), (7 * 1024 * 1024) * math.Pow10(-1)}, // '* Pow10' and '/ float(10)' do not round the same way
+		{decQuantity(7*1024*1024, -8, DecimalSI), (7 * 1024 * 1024) / float64(100000000)},
+
+		{decQuantity(1024, 0, DecimalExponent), 1024},
+		{decQuantity(8*1024, 0, DecimalExponent), 8 * 1024},
+		{decQuantity(7*1024*1024, 0, DecimalExponent), 7 * 1024 * 1024},
+		{decQuantity(7*1024*1024, 1, DecimalExponent), (7 * 1024 * 1024) * 10},
+		{decQuantity(7*1024*1024, 4, DecimalExponent), (7 * 1024 * 1024) * 10000},
+		{decQuantity(7*1024*1024, 8, DecimalExponent), (7 * 1024 * 1024) * 100000000},
+		{decQuantity(7*1024*1024, -1, DecimalExponent), (7 * 1024 * 1024) * math.Pow10(-1)}, // '* Pow10' and '/ float(10)' do not round the same way
+		{decQuantity(7*1024*1024, -8, DecimalExponent), (7 * 1024 * 1024) / float64(100000000)},
+
+		// very large numbers
+		{Quantity{d: maxAllowed, Format: DecimalSI}, math.MaxInt64},
+		{Quantity{d: maxAllowed, Format: BinarySI}, math.MaxInt64},
+		{decQuantity(12, 18, DecimalSI), 1.2e19},
+
+		// infinities caused due to float64 overflow
+		{decQuantity(12, 500, DecimalSI), math.Inf(0)},
+		{decQuantity(-12, 500, DecimalSI), math.Inf(-1)},
+
+		// // We'll accept fractional binary stuff, too.
+		// {decQuantity(10243584, -2, BinarySI)},
+		// {decQuantity(.5*1024*1024, 0, BinarySI)},
+		// {decQuantity(536870912, -1, BinarySI)},
+		// {decQuantity(274877906944, -1, BinarySI)},
+
+		// // Things written by trolls
+		// {decQuantity(2, -9, DecimalSI)}, // rounds up, changes format
+		// {decQuantity(1, -3, DecimalSI)},
+		// {decQuantity(100, -3, DecimalSI)},
+		// {decQuantity(1, 0, DecimalSI)},
+		// {decQuantity(1, 9, DecimalSI)},
+
+		// {decQuantity(10*1024*1024*1024*1024, 0, BinarySI)},
+		// {decQuantity(100*1024*1024*1024*1024, 0, BinarySI)},
+
+		// // Decimal suffixes
+		// {decQuantity(5, -9, DecimalSI)},
+		// {decQuantity(4, -6, DecimalSI)},
+		// {decQuantity(3, -3, DecimalSI)},
+		// {decQuantity(9, 0, DecimalSI)},
+		// {decQuantity(8, 3, DecimalSI)},
+		// {decQuantity(5, 4, DecimalSI)},
+		// {decQuantity(7, 6, DecimalSI)},
+		// {decQuantity(6, 9, DecimalSI)},
+		// {decQuantity(5, 12, DecimalSI)},
+		// {decQuantity(4, 13, DecimalSI)},
+		// {decQuantity(3, 14, DecimalSI)},
+		// {decQuantity(2, 15, DecimalSI)},
+		// {decQuantity(1, 18, DecimalSI)},
+
+		// // Decimal exponents
+		// {decQuantity(1, -3, DecimalExponent)},
+		// {decQuantity(1, 3, DecimalExponent)},
+		// {decQuantity(1, 6, DecimalExponent)},
+		// {decQuantity(1, 9, DecimalExponent)},
+		// {decQuantity(1, 12, DecimalExponent)},
+		// {decQuantity(1, 15, DecimalExponent)},
+		// {decQuantity(1, 18, DecimalExponent)},
+
+		// // Nonstandard but still parsable
+		// {decQuantity(1, 14, DecimalExponent)},
+		// {decQuantity(1, 13, DecimalExponent)},
+		// {decQuantity(1, 3, DecimalExponent)},
+		// {decQuantity(100035, 0, DecimalSI)},
+
+		// // Things that look like floating point
+		// {decQuantity(1, -3, DecimalSI)},
+		// {decQuantity(5, -1, DecimalSI)},
+		// {decQuantity(5, -3, DecimalSI)},
+		// {decQuantity(5, -2, DecimalSI)},
+		// {decQuantity(5, -1, DecimalSI)},
+		// {decQuantity(5, -1, DecimalSI)},
+		// {decQuantity(5, -3, DecimalSI)},
+		// {decQuantity(5, -2, DecimalSI)},
+		// {decQuantity(5, -1, DecimalSI)},
+		// {decQuantity(5, -1, DecimalExponent)},
+		// {decQuantity(5, -2, DecimalExponent)},
+		// {decQuantity(5, -3, DecimalExponent)},
+		// {decQuantity(5, -1, DecimalExponent)},
+		// {decQuantity(10035, 3, DecimalSI)},
+
+		// {decQuantity(12, 2, DecimalExponent)},
+		// {decQuantity(13, 5, DecimalExponent)},
+		// {decQuantity(14, 8, DecimalExponent)},
+		// {decQuantity(153, 10, DecimalExponent)},
+		// {decQuantity(16, 14, DecimalExponent)},
+		// {decQuantity(17, 17, DecimalExponent)},
+
+		// {decQuantity(901, -2, DecimalSI)},
+		// {decQuantity(81, 2, DecimalSI)},
+		// {decQuantity(7123456, 0, DecimalSI)},
+		// {decQuantity(6987654321, 0, DecimalSI)},
+		// {decQuantity(5444, 9, DecimalSI)},
+		// {decQuantity(401, 11, DecimalSI)},
+		// {decQuantity(3002, 11, DecimalSI)},
+		// {decQuantity(25, 14, DecimalSI)},
+		// {decQuantity(101, 16, DecimalSI)},
+
+		// // Things that saturate/round
+		// {decQuantity(4, -9, DecimalSI)},
+		// {decQuantity(2, -9, DecimalExponent)},
+		// {decQuantity(1, -9, DecimalSI)},
+		// {decQuantity(1, -9, DecimalSI)},
+		// {decQuantity(1, -9, DecimalSI)},
+		// {decQuantity(1, -9, DecimalExponent)},
+		// {decQuantity(1, -9, DecimalSI)},
+		// {decQuantity(124, -9, DecimalSI)},
+		// {decQuantity(124, -9, DecimalSI)},
+		// {Quantity{d: maxAllowed, Format: BinarySI}},
+		// {Quantity{d: maxAllowed, Format: BinarySI}},
+		// {decQuantity(12, 18, DecimalSI)},
+
+		// // We'll accept fractional binary stuff, too.
+		// {decQuantity(10243584, -2, BinarySI)},
+		// {decQuantity(.5*1024*1024, 0, BinarySI)},
+		// {decQuantity(536870912, -1, BinarySI)},
+		// {decQuantity(274877906944, -1, BinarySI)},
+
+		// // Things written by trolls
+		// {decQuantity(2, -9, DecimalSI)}, // rounds up, changes format
+		// {decQuantity(1, -3, DecimalSI)},
+		// {decQuantity(100, -3, DecimalSI)},
+		// {decQuantity(1, 0, DecimalSI)},
+		// {decQuantity(1, 9, DecimalSI)},
+	}
+
+	for _, item := range table {
+		t.Run(fmt.Sprintf("%s %s", item.in.Format, item.in.String()), func(t *testing.T) {
+			out := item.in.AsApproximateFloat64()
+			if out != item.out {
+				t.Fatalf("expected %v, got %v", item.out, out)
+			}
+			if item.in.d.Dec != nil {
+				if i, ok := item.in.AsInt64(); ok {
+					q := intQuantity(i, 0, item.in.Format)
+					out := q.AsApproximateFloat64()
+					if out != item.out {
+						t.Fatalf("as int quantity: expected %v, got %v", item.out, out)
+					}
+				}
+			}
+		})
+	}
+}
+
 func benchmarkQuantities() []Quantity {
 	return []Quantity{
 		intQuantity(1024*1024*1024, 0, BinarySI),
@@ -1341,6 +1520,18 @@ func BenchmarkQuantityCmp(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		q := values[i%len(values)]
 		if q.Cmp(q) != 0 {
+			b.Fatal(q)
+		}
+	}
+	b.StopTimer()
+}
+
+func BenchmarkQuantityAsApproximateFloat64(b *testing.B) {
+	values := benchmarkQuantities()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		q := values[i%len(values)]
+		if q.AsApproximateFloat64() == -1 {
 			b.Fatal(q)
 		}
 	}
