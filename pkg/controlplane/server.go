@@ -32,7 +32,6 @@ import (
 	"k8s.io/apiserver/pkg/authorization/union"
 	openapinamer "k8s.io/apiserver/pkg/endpoints/openapi"
 	genericapiserver "k8s.io/apiserver/pkg/server"
-	"k8s.io/apiserver/pkg/server/egressselector"
 	"k8s.io/apiserver/pkg/server/filters"
 	serverstorage "k8s.io/apiserver/pkg/server/storage"
 	utilflowcontrol "k8s.io/apiserver/pkg/util/flowcontrol"
@@ -259,24 +258,24 @@ func BuildGenericConfig(
 	// on a fast local network
 	genericConfig.LoopbackClientConfig.DisableCompression = true
 
-	// kubeClientConfig := genericConfig.LoopbackClientConfig
-	// clientgoExternalClient, err := clientgoclientset.NewForConfig(kubeClientConfig)
-	// if err != nil {
-	// 	lastErr = fmt.Errorf("failed to create real external clientset: %v", err)
-	// 	return
-	// }
-	// versionedInformers = clientgoinformers.NewSharedInformerFactory(clientgoExternalClient, 10*time.Minute)
+	kubeClientConfig := genericConfig.LoopbackClientConfig
+	clientgoExternalClient, err := clientgoclientset.NewForConfig(kubeClientConfig)
+	if err != nil {
+		lastErr = fmt.Errorf("failed to create real external clientset: %v", err)
+		return
+	}
+	versionedInformers := clientgoinformers.NewSharedInformerFactory(clientgoExternalClient, 10*time.Minute)
 
 	// Authentication.ApplyTo requires already applied OpenAPIConfig and EgressSelector if present
 	if lastErr = AuthenticationApplyTo(s.Authentication, &genericConfig.Authentication, genericConfig.SecureServing, genericConfig.EgressSelector, genericConfig.OpenAPIConfig); lastErr != nil {
 		return
 	}
 
-	// genericConfig.Authorization.Authorizer, genericConfig.RuleResolver, err = BuildAuthorizer(s, genericConfig.EgressSelector, versionedInformers)
-	// if err != nil {
-	// 	lastErr = fmt.Errorf("invalid authorization config: %v", err)
-	// 	return
-	// }
+	genericConfig.Authorization.Authorizer, genericConfig.RuleResolver, err = BuildAuthorizer(s, versionedInformers)
+	if err != nil {
+		lastErr = fmt.Errorf("invalid authorization config: %v", err)
+		return
+	}
 
 	// admissionConfig := &controlplaneadmission.Config{
 	// 	ExternalInformers:    versionedInformers,
@@ -323,7 +322,7 @@ func BuildGenericConfig(
 }
 
 // BuildAuthorizer constructs the authorizer
-func BuildAuthorizer(s *options.ServerRunOptions, egressSelector *egressselector.EgressSelector, versionedInformers clientgoinformers.SharedInformerFactory) (authorizer.Authorizer, authorizer.RuleResolver, error) {
+func BuildAuthorizer(s *options.ServerRunOptions, versionedInformers clientgoinformers.SharedInformerFactory) (authorizer.Authorizer, authorizer.RuleResolver, error) {
 	var (
 		authorizers   []authorizer.Authorizer
 		ruleResolvers []authorizer.RuleResolver
