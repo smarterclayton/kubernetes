@@ -44,7 +44,7 @@ import (
 	"k8s.io/component-base/version"
 	"k8s.io/klog"
 	aggregatorapiserver "k8s.io/kube-aggregator/pkg/apiserver"
-	"k8s.io/kubernetes/pkg/api/legacyscheme"
+	"k8s.io/kubernetes/pkg/api/controlplanescheme"
 	"k8s.io/kubernetes/pkg/controlplane/apis"
 	"k8s.io/kubernetes/pkg/controlplane/options"
 	generatedopenapi "k8s.io/kubernetes/pkg/generated/openapi"
@@ -200,7 +200,7 @@ func BuildGenericConfig(
 	storageFactory *serverstorage.DefaultStorageFactory,
 	lastErr error,
 ) {
-	genericConfig = genericapiserver.NewConfig(legacyscheme.Codecs)
+	genericConfig = genericapiserver.NewConfig(controlplanescheme.Codecs)
 
 	if lastErr = s.GenericServerRunOptions.ApplyTo(genericConfig); lastErr != nil {
 		return
@@ -215,14 +215,14 @@ func BuildGenericConfig(
 	if lastErr = s.Features.ApplyTo(genericConfig); lastErr != nil {
 		return
 	}
-	if lastErr = s.APIEnablement.ApplyTo(genericConfig, apis.DefaultAPIResourceConfigSource(), legacyscheme.Scheme); lastErr != nil {
+	if lastErr = s.APIEnablement.ApplyTo(genericConfig, apis.DefaultAPIResourceConfigSource(), controlplanescheme.Scheme); lastErr != nil {
 		return
 	}
 	if lastErr = s.EgressSelector.ApplyTo(genericConfig); lastErr != nil {
 		return
 	}
 
-	genericConfig.OpenAPIConfig = genericapiserver.DefaultOpenAPIConfig(generatedopenapi.GetOpenAPIDefinitions, openapinamer.NewDefinitionNamer(extensionsapiserver.Scheme))
+	genericConfig.OpenAPIConfig = genericapiserver.DefaultOpenAPIConfig(generatedopenapi.GetOpenAPIDefinitions, openapinamer.NewDefinitionNamer(controlplanescheme.Scheme, extensionsapiserver.Scheme))
 	genericConfig.OpenAPIConfig.Info.Title = "Kubernetes"
 	genericConfig.LongRunningFunc = filters.BasicLongRunningRequestCheck(
 		sets.NewString("watch", "proxy"),
