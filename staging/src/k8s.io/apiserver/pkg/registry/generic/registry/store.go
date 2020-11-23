@@ -203,10 +203,26 @@ const (
 	resourceCountPollPeriodJitter = 1.2
 )
 
+func clusterFrom(ctx context.Context) string {
+	v := ctx.Value("cluster")
+	cluster, ok := v.(string)
+	if !ok {
+		return ""
+	}
+	if len(cluster) == 0 {
+		return "default"
+	}
+	return cluster
+}
+
 // NamespaceKeyRootFunc is the default function for constructing storage paths
 // to resource directories enforcing namespace rules.
 func NamespaceKeyRootFunc(ctx context.Context, prefix string) string {
 	key := prefix
+	cluster := clusterFrom(ctx)
+	if len(cluster) > 0 {
+		key = key + "/" + cluster
+	}
 	ns, ok := genericapirequest.NamespaceFrom(ctx)
 	if ok && len(ns) > 0 {
 		key = key + "/" + ns
@@ -236,13 +252,18 @@ func NamespaceKeyFunc(ctx context.Context, prefix string, name string) (string, 
 // NoNamespaceKeyFunc is the default function for constructing storage paths
 // to a resource relative to the given prefix without a namespace.
 func NoNamespaceKeyFunc(ctx context.Context, prefix string, name string) (string, error) {
+	key := prefix
+	cluster := clusterFrom(ctx)
+	if len(cluster) > 0 {
+		key = key + "/" + cluster
+	}
 	if len(name) == 0 {
 		return "", apierrors.NewBadRequest("Name parameter required.")
 	}
 	if msgs := path.IsValidPathSegmentName(name); len(msgs) != 0 {
 		return "", apierrors.NewBadRequest(fmt.Sprintf("Name parameter invalid: %q: %s", name, strings.Join(msgs, ";")))
 	}
-	key := prefix + "/" + name
+	key = key + "/" + name
 	return key, nil
 }
 
@@ -608,6 +629,7 @@ func (e *Store) Get(ctx context.Context, name string, options *metav1.GetOptions
 	if err != nil {
 		return nil, err
 	}
+	klog.Infof("DEBUG: GET key func returned: %s", key)
 	if err := e.Storage.Get(ctx, key, options.ResourceVersion, obj, false); err != nil {
 		return nil, storeerr.InterpretGetError(err, e.qualifiedResourceFromContext(ctx), name)
 	}
@@ -1215,6 +1237,9 @@ func (e *Store) CompleteWithOptions(options *generic.StoreOptions) error {
 	}
 	if (e.KeyRootFunc == nil) != (e.KeyFunc == nil) {
 		return fmt.Errorf("store for %s must set both KeyRootFunc and KeyFunc or neither", e.DefaultQualifiedResource.String())
+	}
+	if e.KeyFunc != nil || e.KeyFunc != nil {
+		return fmt.Errorf("DEBUG: keyfunc must be non-nil for all resources", e.DefaultQualifiedResource.String())
 	}
 
 	var isNamespaced bool

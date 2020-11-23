@@ -280,6 +280,24 @@ func BuildGenericConfig(
 		return
 	}
 
+	var originalHandler = genericConfig.BuildHandlerChainFunc
+	var reClusterName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,78}[a-z0-9]$`)
+	genericConfig.BuildHandlerChainFunc = func(handler http.Handler, c *genericapiserver.Config) http.Handler {
+		return originalHandler(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			cluster := req.Header.Get("X-Kubernetes-Cluster")
+			if len(cluster) == 0 {
+				cluster = "default"
+			}
+			if !reClusterName.MatchString(cluster) {
+				http.Error(w, "Unknown cluster", http.StatusNotFound)
+				return
+			}
+			klog.V(5).Infof("DEBUG: running with cluster %s", cluster)
+			ctx := context.WithValue(req.Context(), "cluster", cluster)
+			handler.ServeHTTP(w, req.WithContext(ctx))
+		}), c)
+	}
+
 	// admissionConfig := &controlplaneadmission.Config{
 	// 	ExternalInformers:    versionedInformers,
 	// 	LoopbackClientConfig: genericConfig.LoopbackClientConfig,
