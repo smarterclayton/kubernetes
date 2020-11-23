@@ -21,48 +21,19 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/runtime/serializer"
 	serveroptions "k8s.io/apiserver/pkg/server/options"
 	"k8s.io/apiserver/pkg/server/options/encryptionconfig"
 	"k8s.io/apiserver/pkg/server/resourceconfig"
 	serverstorage "k8s.io/apiserver/pkg/server/storage"
 	"k8s.io/apiserver/pkg/storage/storagebackend"
-	"k8s.io/kubernetes/pkg/api/legacyscheme"
-	"k8s.io/kubernetes/pkg/apis/apps"
-	"k8s.io/kubernetes/pkg/apis/batch"
-	api "k8s.io/kubernetes/pkg/apis/core"
-	"k8s.io/kubernetes/pkg/apis/events"
-	"k8s.io/kubernetes/pkg/apis/extensions"
-	"k8s.io/kubernetes/pkg/apis/networking"
-	"k8s.io/kubernetes/pkg/apis/policy"
-	apisstorage "k8s.io/kubernetes/pkg/apis/storage"
 )
 
-// SpecialDefaultResourcePrefixes are prefixes compiled into Kubernetes.
-var SpecialDefaultResourcePrefixes = map[schema.GroupResource]string{
-	{Group: "", Resource: "replicationcontrollers"}:        "controllers",
-	{Group: "", Resource: "endpoints"}:                     "services/endpoints",
-	{Group: "", Resource: "nodes"}:                         "minions",
-	{Group: "", Resource: "services"}:                      "services/specs",
-	{Group: "extensions", Resource: "ingresses"}:           "ingress",
-	{Group: "networking.k8s.io", Resource: "ingresses"}:    "ingress",
-	{Group: "extensions", Resource: "podsecuritypolicies"}: "podsecuritypolicy",
-	{Group: "policy", Resource: "podsecuritypolicies"}:     "podsecuritypolicy",
-}
-
 // NewStorageFactoryConfig returns a new StorageFactoryConfig set up with necessary resource overrides.
-func NewStorageFactoryConfig() *StorageFactoryConfig {
-
-	resources := []schema.GroupVersionResource{
-		batch.Resource("cronjobs").WithVersion("v1beta1"),
-		networking.Resource("ingresses").WithVersion("v1beta1"),
-		networking.Resource("ingressclasses").WithVersion("v1beta1"),
-		apisstorage.Resource("csidrivers").WithVersion("v1beta1"),
-	}
-
+func NewStorageFactoryConfig(scheme *runtime.Scheme, codecs serializer.CodecFactory) *StorageFactoryConfig {
 	return &StorageFactoryConfig{
-		Serializer:                legacyscheme.Codecs,
-		DefaultResourceEncoding:   serverstorage.NewDefaultResourceEncodingConfig(legacyscheme.Scheme),
-		ResourceEncodingOverrides: resources,
+		Serializer:              codecs,
+		DefaultResourceEncoding: serverstorage.NewDefaultResourceEncodingConfig(scheme),
 	}
 }
 
@@ -104,16 +75,7 @@ func (c *completedStorageFactoryConfig) New() (*serverstorage.DefaultStorageFact
 		c.Serializer,
 		resourceEncodingConfig,
 		c.APIResourceConfig,
-		SpecialDefaultResourcePrefixes)
-
-	storageFactory.AddCohabitatingResources(networking.Resource("networkpolicies"), extensions.Resource("networkpolicies"))
-	storageFactory.AddCohabitatingResources(apps.Resource("deployments"), extensions.Resource("deployments"))
-	storageFactory.AddCohabitatingResources(apps.Resource("daemonsets"), extensions.Resource("daemonsets"))
-	storageFactory.AddCohabitatingResources(apps.Resource("replicasets"), extensions.Resource("replicasets"))
-	storageFactory.AddCohabitatingResources(api.Resource("events"), events.Resource("events"))
-	storageFactory.AddCohabitatingResources(api.Resource("replicationcontrollers"), extensions.Resource("replicationcontrollers")) // to make scale subresources equivalent
-	storageFactory.AddCohabitatingResources(policy.Resource("podsecuritypolicies"), extensions.Resource("podsecuritypolicies"))
-	storageFactory.AddCohabitatingResources(networking.Resource("ingresses"), extensions.Resource("ingresses"))
+		nil)
 
 	for _, override := range c.EtcdServersOverrides {
 		tokens := strings.Split(override, "#")

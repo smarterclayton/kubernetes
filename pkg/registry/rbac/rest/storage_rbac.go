@@ -165,9 +165,6 @@ func (p *PolicyData) EnsureRBACPolicy() genericapiserver.PostStartHookFunc {
 		// initializing roles is really important.  On some e2e runs, we've seen cases where etcd is down when the server
 		// starts, the roles don't initialize, and nothing works.
 		err := wait.Poll(1*time.Second, 30*time.Second, func() (done bool, err error) {
-
-			klog.Infof("DEBUG: loopback context: %#v", hookContext.LoopbackClientConfig)
-
 			coreclientset, err := corev1client.NewForConfig(hookContext.LoopbackClientConfig)
 			if err != nil {
 				utilruntime.HandleError(fmt.Errorf("unable to initialize client: %v", err))

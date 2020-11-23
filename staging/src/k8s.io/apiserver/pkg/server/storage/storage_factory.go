@@ -71,6 +71,10 @@ type DefaultStorageFactory struct {
 
 	DefaultResourcePrefixes map[schema.GroupResource]string
 
+	// UseResourceAsPrefixDefault applies the legacy behavior of defaulting prefix to the
+	// resource name if no group prefix is set.
+	UseResourceAsPrefixDefault bool
+
 	// DefaultMediaType is the media type used to store resources. If it is not set, "application/json" is used.
 	DefaultMediaType string
 
@@ -343,8 +347,18 @@ func (s *DefaultStorageFactory) ResourcePrefix(groupResource schema.GroupResourc
 		etcdResourcePrefix = exactResourceOverride.etcdResourcePrefix
 	}
 	if len(etcdResourcePrefix) == 0 {
-		etcdResourcePrefix = strings.ToLower(chosenStorageResource.Resource)
+		if s.UseResourceAsPrefixDefault {
+			etcdResourcePrefix = strings.ToLower(chosenStorageResource.Resource)
+		} else {
+			groupName := chosenStorageResource.Group
+			if len(groupName) == 0 {
+				groupName = "core"
+			}
+			etcdResourcePrefix = groupName + "/" + chosenStorageResource.Resource
+		}
 	}
+
+	klog.Infof("DEBUG: prefix for %s=%s", groupResource, etcdResourcePrefix)
 
 	return etcdResourcePrefix
 }

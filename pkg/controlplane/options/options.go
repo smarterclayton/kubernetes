@@ -58,6 +58,9 @@ func NewServerRunOptions() *ServerRunOptions {
 		EventTTL:          1 * time.Hour,
 	}
 
+	// disable the watch cache
+	s.Etcd.EnableWatchCache = false
+
 	// TODO: turn off the admission webhooks for now
 	s.Admission.DefaultOffPlugins.Insert(validating.PluginName, mutating.PluginName)
 
