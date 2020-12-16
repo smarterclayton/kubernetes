@@ -58,6 +58,7 @@ var EvictionsRetry = wait.Backoff{
 }
 
 func newEvictionStorage(store rest.StandardStorage, podDisruptionBudgetClient policyclient.PodDisruptionBudgetsGetter) *EvictionREST {
+	registerMetrics()
 	return &EvictionREST{store: store, podDisruptionBudgetClient: podDisruptionBudgetClient}
 }
 
@@ -160,6 +161,9 @@ func (r *EvictionREST) Create(ctx context.Context, name string, obj runtime.Obje
 		_, _, err = r.store.Delete(ctx, eviction.Name, rest.ValidateAllObjectFunc, deleteOptions)
 		if err != nil {
 			return err
+		}
+		if pod.DeletionTimestamp == nil {
+			evictionsTotal.Inc()
 		}
 		deletedPod = true
 		return nil
@@ -266,6 +270,9 @@ func (r *EvictionREST) Create(ctx context.Context, name string, obj runtime.Obje
 		}
 		return nil, err
 	}
+
+	evictionsTotal.Inc()
+	//evictionsTotal.WithLabelValues(pod.Namespace, pod.Name).Inc()
 
 	// Success!
 	return &metav1.Status{Status: metav1.StatusSuccess}, nil
