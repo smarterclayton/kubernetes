@@ -20,7 +20,6 @@ limitations under the License.
 package controlplane
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -34,6 +33,7 @@ import (
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	"k8s.io/apiserver/pkg/authorization/union"
 	openapinamer "k8s.io/apiserver/pkg/endpoints/openapi"
+	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	"k8s.io/apiserver/pkg/server/filters"
 	serverstorage "k8s.io/apiserver/pkg/server/storage"
@@ -283,19 +283,41 @@ func BuildGenericConfig(
 	var originalHandler = genericConfig.BuildHandlerChainFunc
 	var reClusterName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,78}[a-z0-9]$`)
 	genericConfig.BuildHandlerChainFunc = func(handler http.Handler, c *genericapiserver.Config) http.Handler {
-		return originalHandler(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			cluster := req.Header.Get("X-Kubernetes-Cluster")
+		h := originalHandler(handler, c)
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			var cluster string
+			if path := req.URL.Path; strings.HasPrefix(path, "/clusters/") {
+				path = strings.TrimPrefix(path, "/clusters/")
+				i := strings.Index(path, "/")
+				if i == -1 {
+					http.Error(w, "Unknown cluster", http.StatusNotFound)
+					return
+				}
+				cluster, path = path[:i], path[i:]
+				req.URL.Path = path
+				for i := 0; i < 2 && len(req.URL.RawPath) > 1; i++ {
+					slash := strings.Index(req.URL.RawPath[1:], "/")
+					if slash == -1 {
+						http.Error(w, "Unknown cluster", http.StatusNotFound)
+						return
+					}
+					klog.Infof("DEBUG: %s -> %s", req.URL.RawPath, req.URL.RawPath[slash:])
+					req.URL.RawPath = req.URL.RawPath[slash:]
+				}
+			} else {
+				cluster = req.Header.Get("X-Kubernetes-Cluster")
+			}
 			if len(cluster) == 0 {
-				cluster = "default"
+				cluster = "admin"
 			}
 			if !reClusterName.MatchString(cluster) {
 				http.Error(w, "Unknown cluster", http.StatusNotFound)
 				return
 			}
-			klog.V(5).Infof("DEBUG: running with cluster %s", cluster)
-			ctx := context.WithValue(req.Context(), "cluster", cluster)
-			handler.ServeHTTP(w, req.WithContext(ctx))
-		}), c)
+			//klog.V(0).Infof("DEBUG: running with cluster %s", cluster)
+			ctx := genericapirequest.WithCluster(req.Context(), genericapirequest.Cluster{Name: cluster})
+			h.ServeHTTP(w, req.WithContext(ctx))
+		})
 	}
 
 	// admissionConfig := &controlplaneadmission.Config{
