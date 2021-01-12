@@ -207,7 +207,7 @@ const (
 // to resource directories enforcing namespace rules.
 func NoNamespaceKeyRootFunc(ctx context.Context, prefix string) string {
 	key := prefix
-	if cluster := genericapirequest.ClusterFrom(ctx); cluster != nil {
+	if cluster := genericapirequest.ClusterFrom(ctx); cluster != nil && !cluster.Wildcard {
 		key = key + "/" + cluster.Name
 	}
 	return key

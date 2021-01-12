@@ -32,6 +32,10 @@ type Cluster struct {
 	Name string
 	// Parents defines the parent clusters that apply to this request.
 	Parents []string
+
+	// HACK: only for testing wildcard semantics
+	// If true the query applies to all clusters
+	Wildcard bool
 }
 
 // WithCluster returns a context that describes the nested cluster context

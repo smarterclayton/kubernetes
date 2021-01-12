@@ -285,7 +285,7 @@ func BuildGenericConfig(
 	genericConfig.BuildHandlerChainFunc = func(handler http.Handler, c *genericapiserver.Config) http.Handler {
 		h := originalHandler(handler, c)
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			var cluster string
+			var clusterName string
 			if path := req.URL.Path; strings.HasPrefix(path, "/clusters/") {
 				path = strings.TrimPrefix(path, "/clusters/")
 				i := strings.Index(path, "/")
@@ -293,7 +293,7 @@ func BuildGenericConfig(
 					http.Error(w, "Unknown cluster", http.StatusNotFound)
 					return
 				}
-				cluster, path = path[:i], path[i:]
+				clusterName, path = path[:i], path[i:]
 				req.URL.Path = path
 				for i := 0; i < 2 && len(req.URL.RawPath) > 1; i++ {
 					slash := strings.Index(req.URL.RawPath[1:], "/")
@@ -305,17 +305,25 @@ func BuildGenericConfig(
 					req.URL.RawPath = req.URL.RawPath[slash:]
 				}
 			} else {
-				cluster = req.Header.Get("X-Kubernetes-Cluster")
+				clusterName = req.Header.Get("X-Kubernetes-Cluster")
 			}
-			if len(cluster) == 0 {
-				cluster = "admin"
-			}
-			if !reClusterName.MatchString(cluster) {
-				http.Error(w, "Unknown cluster", http.StatusNotFound)
-				return
+			var cluster genericapirequest.Cluster
+			switch clusterName {
+			case "*":
+				// HACK: just a workaround for testing
+				cluster.Wildcard = true
+				fallthrough
+			case "":
+				cluster.Name = "admin"
+			default:
+				if !reClusterName.MatchString(clusterName) {
+					http.Error(w, "Unknown cluster", http.StatusNotFound)
+					return
+				}
+				cluster.Name = clusterName
 			}
 			//klog.V(0).Infof("DEBUG: running with cluster %s", cluster)
-			ctx := genericapirequest.WithCluster(req.Context(), genericapirequest.Cluster{Name: cluster})
+			ctx := genericapirequest.WithCluster(req.Context(), cluster)
 			h.ServeHTTP(w, req.WithContext(ctx))
 		})
 	}

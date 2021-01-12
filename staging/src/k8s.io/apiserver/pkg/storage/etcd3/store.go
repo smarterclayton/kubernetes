@@ -36,6 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/conversion"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
+	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/storage"
 	"k8s.io/apiserver/pkg/storage/etcd3/metrics"
@@ -724,7 +725,11 @@ func (s *store) watch(ctx context.Context, key string, rv string, pred storage.S
 		return nil, err
 	}
 	key = path.Join(s.pathPrefix, key)
-	return s.watcher.Watch(ctx, key, int64(rev), recursive, pred)
+	// HACK: would need to be an argument to storage (or a change to how decoding works for key structure)
+	cluster := genericapirequest.ClusterFrom(ctx)
+	extractClusterSegmentFromKey := cluster != nil && cluster.Wildcard
+	klog.Infof("DEBUG: key=%s willExtractCluster=%t", key, extractClusterSegmentFromKey)
+	return s.watcher.Watch(ctx, key, int64(rev), recursive, extractClusterSegmentFromKey, pred)
 }
 
 func (s *store) getState(getResp *clientv3.GetResponse, key string, v reflect.Value, ignoreNotFound bool) (*objState, error) {
