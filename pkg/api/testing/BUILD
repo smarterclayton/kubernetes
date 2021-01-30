@@ -78,6 +78,7 @@ filegroup(
     srcs = [
         ":package-srcs",
         "//pkg/api/testing/compat:all-srcs",
+        "//pkg/api/testing/sizes:all-srcs",
     ],
     tags = ["automanaged"],
 )
