@@ -26,14 +26,13 @@ import (
 	"testing"
 	"time"
 
-	"k8s.io/klog/v2"
-
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	discovery "k8s.io/api/discovery/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/proxy"
 	"k8s.io/kubernetes/pkg/proxy/healthcheck"
 	utilproxy "k8s.io/kubernetes/pkg/proxy/util"
@@ -2682,4 +2681,195 @@ COMMIT
 	assert.NotEqual(t, expectedIPTablesWithSlice, fp.iptablesData.String())
 }
 
-// TODO(thockin): add *more* tests for syncProxyRules() or break it down further and test the pieces.
+func TestHealthCheckNodePortE2E(t *testing.T) {
+	expectedIPTables := `*filter
+:KUBE-SERVICES - [0:0]
+:KUBE-EXTERNAL-SERVICES - [0:0]
+:KUBE-FORWARD - [0:0]
+:KUBE-NODEPORTS - [0:0]
+-A KUBE-NODEPORTS -m comment --comment "ns1/svc1 health check node port" -m tcp -p tcp --dport 30000 -j ACCEPT
+-A KUBE-FORWARD -m conntrack --ctstate INVALID -j DROP
+-A KUBE-FORWARD -m comment --comment "kubernetes forwarding rules" -m mark --mark 0x4000/0x4000 -j ACCEPT
+-A KUBE-FORWARD -m comment --comment "kubernetes forwarding conntrack pod source rule" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+-A KUBE-FORWARD -m comment --comment "kubernetes forwarding conntrack pod destination rule" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+COMMIT
+*nat
+:KUBE-SERVICES - [0:0]
+:KUBE-NODEPORTS - [0:0]
+:KUBE-POSTROUTING - [0:0]
+:KUBE-MARK-MASQ - [0:0]
+:KUBE-SVC-AQI2S6QIMU7PVVRP - [0:0]
+:KUBE-XLB-AQI2S6QIMU7PVVRP - [0:0]
+:KUBE-SEP-3JOIVZTXZZRGORX4 - [0:0]
+:KUBE-SEP-IO5XOSKPAXIFQXAJ - [0:0]
+:KUBE-SEP-XGJFVO3L2O5SRFNT - [0:0]
+-A KUBE-POSTROUTING -m mark ! --mark 0x4000/0x4000 -j RETURN
+-A KUBE-POSTROUTING -j MARK --xor-mark 0x4000
+-A KUBE-POSTROUTING -m comment --comment "kubernetes service traffic requiring SNAT" -j MASQUERADE
+-A KUBE-MARK-MASQ -j MARK --or-mark 0x4000
+-A KUBE-SERVICES -m comment --comment "ns1/svc1 cluster IP" -m tcp -p tcp -d 172.20.1.1/32 --dport 0 ! -s 10.0.0.0/24 -j KUBE-MARK-MASQ
+-A KUBE-SERVICES -m comment --comment "ns1/svc1 cluster IP" -m tcp -p tcp -d 172.20.1.1/32 --dport 0 -j KUBE-SVC-AQI2S6QIMU7PVVRP
+-A KUBE-NODEPORTS -m comment --comment ns1/svc1 -m tcp -p tcp --dport 30010 -s 127.0.0.0/8 -j KUBE-MARK-MASQ
+-A KUBE-NODEPORTS -m comment --comment ns1/svc1 -m tcp -p tcp --dport 30010 -j KUBE-XLB-AQI2S6QIMU7PVVRP
+-A KUBE-SVC-AQI2S6QIMU7PVVRP -m comment --comment ns1/svc1 -m statistic --mode random --probability 0.3333333333 -j KUBE-SEP-3JOIVZTXZZRGORX4
+-A KUBE-SEP-3JOIVZTXZZRGORX4 -m comment --comment ns1/svc1 -s 10.0.1.1/32 -j KUBE-MARK-MASQ
+-A KUBE-SEP-3JOIVZTXZZRGORX4 -m comment --comment ns1/svc1 -m tcp -p tcp -j DNAT --to-destination 10.0.1.1:80
+-A KUBE-SVC-AQI2S6QIMU7PVVRP -m comment --comment ns1/svc1 -m statistic --mode random --probability 0.5000000000 -j KUBE-SEP-IO5XOSKPAXIFQXAJ
+-A KUBE-SEP-IO5XOSKPAXIFQXAJ -m comment --comment ns1/svc1 -s 10.0.1.2/32 -j KUBE-MARK-MASQ
+-A KUBE-SEP-IO5XOSKPAXIFQXAJ -m comment --comment ns1/svc1 -m tcp -p tcp -j DNAT --to-destination 10.0.1.2:80
+-A KUBE-SVC-AQI2S6QIMU7PVVRP -m comment --comment ns1/svc1 -j KUBE-SEP-XGJFVO3L2O5SRFNT
+-A KUBE-SEP-XGJFVO3L2O5SRFNT -m comment --comment ns1/svc1 -s 10.0.1.3/32 -j KUBE-MARK-MASQ
+-A KUBE-SEP-XGJFVO3L2O5SRFNT -m comment --comment ns1/svc1 -m tcp -p tcp -j DNAT --to-destination 10.0.1.3:80
+-A KUBE-XLB-AQI2S6QIMU7PVVRP -m comment --comment "Redirect pods trying to reach external loadbalancer VIP to clusterIP" -s 10.0.0.0/24 -j KUBE-SVC-AQI2S6QIMU7PVVRP
+-A KUBE-XLB-AQI2S6QIMU7PVVRP -m comment --comment "masquerade LOCAL traffic for ns1/svc1 LB IP" -m addrtype --src-type LOCAL -j KUBE-MARK-MASQ
+-A KUBE-XLB-AQI2S6QIMU7PVVRP -m comment --comment "route LOCAL traffic for ns1/svc1 LB IP to service chain" -m addrtype --src-type LOCAL -j KUBE-SVC-AQI2S6QIMU7PVVRP
+-A KUBE-XLB-AQI2S6QIMU7PVVRP -m comment --comment "Balancing rule 0 for ns1/svc1" -j KUBE-SEP-3JOIVZTXZZRGORX4
+-A KUBE-SERVICES -m comment --comment "kubernetes service nodeports; NOTE: this must be the last rule in this chain" -m addrtype --dst-type LOCAL -j KUBE-NODEPORTS
+COMMIT
+`
+
+	ipt := iptablestest.NewFake()
+	fp := NewFakeProxier(ipt, true)
+	fp.OnServiceSynced()
+	fp.OnEndpointsSynced()
+	fp.OnEndpointSlicesSynced()
+
+	serviceName := "svc1"
+	namespaceName := "ns1"
+
+	svc := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: serviceName, Namespace: namespaceName},
+		Spec: v1.ServiceSpec{
+			ClusterIP:             "172.20.1.1",
+			Selector:              map[string]string{"foo": "bar"},
+			Ports:                 []v1.ServicePort{{Name: "", TargetPort: intstr.FromInt(80), NodePort: 30010, Protocol: v1.ProtocolTCP}},
+			Type:                  "LoadBalancer",
+			HealthCheckNodePort:   30000,
+			ExternalTrafficPolicy: v1.ServiceExternalTrafficPolicyTypeLocal,
+		},
+	}
+	fp.OnServiceAdd(svc)
+
+	tcpProtocol := v1.ProtocolTCP
+	endpointSlice := &discovery.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s-1", serviceName),
+			Namespace: namespaceName,
+			Labels:    map[string]string{discovery.LabelServiceName: serviceName},
+		},
+		Ports: []discovery.EndpointPort{{
+			Name:     utilpointer.StringPtr(""),
+			Port:     utilpointer.Int32Ptr(80),
+			Protocol: &tcpProtocol,
+		}},
+		AddressType: discovery.AddressTypeIPv4,
+		Endpoints: []discovery.Endpoint{{
+			Addresses:  []string{"10.0.1.1"},
+			Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
+			Topology:   map[string]string{"kubernetes.io/hostname": testHostname},
+		}, {
+			Addresses:  []string{"10.0.1.2"},
+			Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
+			Topology:   map[string]string{"kubernetes.io/hostname": "node2"},
+		}, {
+			Addresses:  []string{"10.0.1.3"},
+			Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
+			Topology:   map[string]string{"kubernetes.io/hostname": "node3"},
+		}, { // not ready endpoints should be ignored
+			Addresses:  []string{"10.0.1.4"},
+			Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(false)},
+			Topology:   map[string]string{"kubernetes.io/hostname": "node4"},
+		}},
+	}
+	fp.OnEndpointSliceAdd(endpointSlice)
+	fp.syncProxyRules()
+	assert.Equal(t, expectedIPTables, fp.iptablesData.String())
+
+	fp.OnServiceDelete(svc)
+	fp.syncProxyRules()
+	assert.NotEqual(t, expectedIPTables, fp.iptablesData.String())
+}
+
+func TestProxierDeleteNodePortStaleUDP(t *testing.T) {
+	fcmd := fakeexec.FakeCmd{}
+	fexec := fakeexec.FakeExec{
+		LookPathFunc: func(cmd string) (string, error) { return cmd, nil },
+	}
+	execFunc := func(cmd string, args ...string) exec.Cmd {
+		return fakeexec.InitFakeCmd(&fcmd, cmd, args...)
+	}
+	cmdOutput := "1 flow entries have been deleted"
+	cmdFunc := func() ([]byte, []byte, error) { return []byte(cmdOutput), nil, nil }
+
+	// Delete ClusterIP entries
+	fcmd.CombinedOutputScript = append(fcmd.CombinedOutputScript, cmdFunc)
+	fexec.CommandScript = append(fexec.CommandScript, execFunc)
+	// Delete NodePort entries
+	fcmd.CombinedOutputScript = append(fcmd.CombinedOutputScript, cmdFunc)
+	fexec.CommandScript = append(fexec.CommandScript, execFunc)
+
+	ipt := iptablestest.NewFake()
+	fp := NewFakeProxier(ipt, false)
+	fp.exec = &fexec
+
+	svcIP := "10.20.30.41"
+	svcPort := 80
+	nodePort := 31201
+	svcPortName := proxy.ServicePortName{
+		NamespacedName: makeNSN("ns1", "svc1"),
+		Port:           "p80",
+		Protocol:       v1.ProtocolUDP,
+	}
+
+	makeServiceMap(fp,
+		makeTestService(svcPortName.Namespace, svcPortName.Name, func(svc *v1.Service) {
+			svc.Spec.ClusterIP = svcIP
+			svc.Spec.Ports = []v1.ServicePort{{
+				Name:     svcPortName.Port,
+				Port:     int32(svcPort),
+				Protocol: v1.ProtocolUDP,
+				NodePort: int32(nodePort),
+			}}
+		}),
+	)
+	makeEndpointsMap(fp)
+
+	fp.syncProxyRules()
+	if fexec.CommandCalls != 0 {
+		t.Fatalf("Created service without endpoints must not clear conntrack entries")
+	}
+
+	epIP := "10.180.0.1"
+	makeEndpointsMap(fp,
+		makeTestEndpoints(svcPortName.Namespace, svcPortName.Name, func(ept *v1.Endpoints) {
+			ept.Subsets = []v1.EndpointSubset{{
+				Addresses: []v1.EndpointAddress{{
+					IP: epIP,
+				}},
+				Ports: []v1.EndpointPort{{
+					Name:     svcPortName.Port,
+					Port:     int32(svcPort),
+					Protocol: v1.ProtocolUDP,
+				}},
+			}}
+		}),
+	)
+
+	fp.syncProxyRules()
+	if fexec.CommandCalls != 2 {
+		t.Fatalf("Updated UDP service with new endpoints must clear UDP entries")
+	}
+
+	// Delete ClusterIP Conntrack entries
+	expectCommand := fmt.Sprintf("conntrack -D --orig-dst %s -p %s", svcIP, strings.ToLower(string((v1.ProtocolUDP))))
+	actualCommand := strings.Join(fcmd.CombinedOutputLog[0], " ")
+	if actualCommand != expectCommand {
+		t.Errorf("Expected command: %s, but executed %s", expectCommand, actualCommand)
+	}
+	// Delete NodePort Conntrack entrie
+	expectCommand = fmt.Sprintf("conntrack -D -p %s --dport %d", strings.ToLower(string((v1.ProtocolUDP))), nodePort)
+	actualCommand = strings.Join(fcmd.CombinedOutputLog[1], " ")
+	if actualCommand != expectCommand {
+		t.Errorf("Expected command: %s, but executed %s", expectCommand, actualCommand)
+	}
+}
