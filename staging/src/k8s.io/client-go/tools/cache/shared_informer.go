@@ -195,6 +195,12 @@ func NewSharedInformer(lw ListerWatcher, exampleObject runtime.Object, defaultEv
 	return NewSharedIndexInformer(lw, exampleObject, defaultEventHandlerResyncPeriod, Indexers{})
 }
 
+// NewSharedIndexInformer creates an informer using the default cache
+// key function DeletionHandlingMetaNamespaceKeyFunc and store implementation.
+func NewSharedIndexInformer(lw ListerWatcher, exampleObject runtime.Object, defaultEventHandlerResyncPeriod time.Duration, indexers Indexers) SharedIndexInformer {
+	return NewSharedInformerForIndexer(lw, exampleObject, defaultEventHandlerResyncPeriod, NewIndexer(DeletionHandlingMetaNamespaceKeyFunc, indexers))
+}
+
 // NewSharedIndexInformer creates a new instance for the listwatcher.
 // The created informer will not do resyncs if the given
 // defaultEventHandlerResyncPeriod is zero.  Otherwise: for each
@@ -206,12 +212,13 @@ func NewSharedInformer(lw ListerWatcher, exampleObject runtime.Object, defaultEv
 // and is the maximum of (a) the minimum of the resync periods
 // requested before the informer starts and the
 // defaultEventHandlerResyncPeriod given here and (b) the constant
-// `minimumResyncPeriod` defined in this file.
-func NewSharedIndexInformer(lw ListerWatcher, exampleObject runtime.Object, defaultEventHandlerResyncPeriod time.Duration, indexers Indexers) SharedIndexInformer {
+// `minimumResyncPeriod` defined in this file. The informer expects
+// to be the sole writer to Store.
+func NewSharedInformerForIndexer(lw ListerWatcher, exampleObject runtime.Object, defaultEventHandlerResyncPeriod time.Duration, indexer Indexer) SharedIndexInformer {
 	realClock := &clock.RealClock{}
 	sharedIndexInformer := &sharedIndexInformer{
 		processor:                       &sharedProcessor{clock: realClock},
-		indexer:                         NewIndexer(DeletionHandlingMetaNamespaceKeyFunc, indexers),
+		indexer:                         indexer,
 		listerWatcher:                   lw,
 		objectType:                      exampleObject,
 		resyncCheckPeriod:               defaultEventHandlerResyncPeriod,
