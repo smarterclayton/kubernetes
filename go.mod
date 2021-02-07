@@ -59,7 +59,7 @@ require (
 	github.com/google/uuid v1.1.2
 	github.com/googleapis/gnostic v0.4.1
 	github.com/gorilla/context v1.1.1 // indirect
-	github.com/hashicorp/golang-lru v0.5.1
+	github.com/hashicorp/golang-lru v0.5.4
 	github.com/heketi/heketi v10.2.0+incompatible
 	github.com/heketi/tests v0.0.0-20151005000721-f3775cbcefd6 // indirect
 	github.com/ishidawataru/sctp v0.0.0-20190723014705-7c296d48a2b5
@@ -301,7 +301,6 @@ replace (
 	github.com/hashicorp/consul/sdk => github.com/hashicorp/consul/sdk v0.1.1
 	github.com/hashicorp/errwrap => github.com/hashicorp/errwrap v1.0.0
 	github.com/hashicorp/go-cleanhttp => github.com/hashicorp/go-cleanhttp v0.5.1
-	github.com/hashicorp/go-immutable-radix => github.com/hashicorp/go-immutable-radix v1.0.0
 	github.com/hashicorp/go-msgpack => github.com/hashicorp/go-msgpack v0.5.3
 	github.com/hashicorp/go-multierror => github.com/hashicorp/go-multierror v1.0.0
 	github.com/hashicorp/go-rootcerts => github.com/hashicorp/go-rootcerts v1.0.0
