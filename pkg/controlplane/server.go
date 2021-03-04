@@ -98,7 +98,21 @@ func CreateServerChain(completedOptions completedServerRunOptions, stopCh <-chan
 		return nil, err
 	}
 
-	return kubeAPIServer.GenericAPIServer, nil
+	// aggregator comes last in the chain
+	aggregatorConfig, err := createAggregatorConfig(*kubeAPIServerConfig.GenericConfig, completedOptions.ServerRunOptions, kubeAPIServerConfig.ExtraConfig.VersionedInformers, serviceResolver, nil, pluginInitializer)
+	if err != nil {
+		return nil, err
+	}
+	aggregatorServer, err := createAggregatorServer(aggregatorConfig, kubeAPIServer.GenericAPIServer, apiExtensionsServer.Informers)
+	if err != nil {
+		// we don't need special handling for innerStopCh because the aggregator server doesn't create any go routines
+		return nil, err
+	}
+
+	return aggregatorServer.GenericAPIServer, nil
+/*	
+  	return kubeAPIServer.GenericAPIServer, nil 
+*/
 }
 
 // CreateKubeAPIServer creates and wires a workable kube-apiserver
