@@ -48,9 +48,11 @@ var (
 func ValidateCustomResourceDefinition(obj *apiextensions.CustomResourceDefinition, requestGV schema.GroupVersion) field.ErrorList {
 	nameValidationFn := func(name string, prefix bool) []string {
 		ret := genericvalidation.NameIsDNSSubdomain(name, prefix)
-		requiredName := obj.Spec.Names.Plural + "." + obj.Spec.Group
-		if name != requiredName {
-			ret = append(ret, fmt.Sprintf(`must be spec.names.plural+"."+spec.group`))
+		if obj.Spec.Group != "" {
+			requiredName := obj.Spec.Names.Plural + "." + obj.Spec.Group
+			if name != requiredName {
+				ret = append(ret, fmt.Sprintf(`must be spec.names.plural+"."+spec.group`))
+			}
 		}
 		return ret
 	}
@@ -171,12 +173,24 @@ func validateCustomResourceDefinitionVersion(version *apiextensions.CustomResour
 func validateCustomResourceDefinitionSpec(spec *apiextensions.CustomResourceDefinitionSpec, opts validationOptions, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 
-	if len(spec.Group) == 0 {
+	if len(spec.Group) == 0 &&
+	(spec.Names.Kind == "Pod" ||
+	spec.Names.Kind == "Node") {
+		// No error: these are non-controlplane kubernetes types
+		// that we want to move up to the KCP CRDs 
+	} else if spec.Group == "apps" || spec.Group == "core" {
+		// No error: these are non-controlplane kubernetes types
+		// that we want to move up to the KCP CRDs 
+	} else if len(spec.Group) == 0 {
 		allErrs = append(allErrs, field.Required(fldPath.Child("group"), ""))
 	} else if errs := utilvalidation.IsDNS1123Subdomain(spec.Group); len(errs) > 0 {
-		allErrs = append(allErrs, field.Invalid(fldPath.Child("group"), spec.Group, strings.Join(errs, ",")))
+		if spec.Group != "apps" && spec.Group != "core" {
+			allErrs = append(allErrs, field.Invalid(fldPath.Child("group"), spec.Group, strings.Join(errs, ",")))
+		}
 	} else if len(strings.Split(spec.Group, ".")) < 2 {
-		allErrs = append(allErrs, field.Invalid(fldPath.Child("group"), spec.Group, "should be a domain with at least one dot"))
+		if spec.Group != "apps" && spec.Group != "core" {
+			allErrs = append(allErrs, field.Invalid(fldPath.Child("group"), spec.Group, "should be a domain with at least one dot"))
+		}
 	}
 
 	allErrs = append(allErrs, validateEnumStrings(fldPath.Child("scope"), string(spec.Scope), []string{string(apiextensions.ClusterScoped), string(apiextensions.NamespaceScoped)}, true)...)
