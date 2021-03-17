@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"k8s.io/klog"
+	"k8s.io/kubernetes/pkg/api/legacyscheme"
 
 	autoscaling "k8s.io/api/autoscaling/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -104,11 +105,18 @@ func (c *DiscoveryController) sync(version schema.GroupVersion) error {
 			// If there is any Served version, that means the group should show up in discovery
 			foundGroup = true
 
+			// HACK: support the case when we add core resources through CRDs (KCP scenario)
+			groupVersion := crd.Spec.Group + "/" + v.Name
+			if crd.Spec.Group == "" {
+				groupVersion = v.Name
+			}
+
 			gv := metav1.GroupVersion{Group: crd.Spec.Group, Version: v.Name}
+
 			if !versionsForDiscoveryMap[gv] {
 				versionsForDiscoveryMap[gv] = true
 				apiVersionsForDiscovery = append(apiVersionsForDiscovery, metav1.GroupVersionForDiscovery{
-					GroupVersion: crd.Spec.Group + "/" + v.Name,
+					GroupVersion: groupVersion,
 					Version:      v.Name,
 				})
 			}
@@ -167,13 +175,30 @@ func (c *DiscoveryController) sync(version schema.GroupVersion) error {
 		}
 	}
 
+	sortGroupDiscoveryByKubeAwareVersion(apiVersionsForDiscovery)
+
+	resourceListerFunc := discovery.APIResourceListerFunc(func() []metav1.APIResource {
+		return apiResourcesForDiscovery
+	})
+
+	// HACK: if we are adding resources in legacy scheme group through CRDs (KCP scenario)
+	// then do not expose the CRD `APIResource`s in their own CRD-related group`,
+	// But instead add them in the existing legacy schema group
+	if legacyscheme.Scheme.IsGroupRegistered(version.Group) {
+		if !foundGroup || !foundVersion{
+			delete(discovery.ContributedResources, version)			
+			return nil
+		}
+	
+		discovery.ContributedResources[version] = resourceListerFunc
+		return nil
+	}
+
 	if !foundGroup {
 		c.groupHandler.unsetDiscovery(version.Group)
 		c.versionHandler.unsetDiscovery(version)
 		return nil
 	}
-
-	sortGroupDiscoveryByKubeAwareVersion(apiVersionsForDiscovery)
 
 	apiGroup := metav1.APIGroup{
 		Name:     version.Group,
@@ -188,9 +213,7 @@ func (c *DiscoveryController) sync(version schema.GroupVersion) error {
 		c.versionHandler.unsetDiscovery(version)
 		return nil
 	}
-	c.versionHandler.setDiscovery(version, discovery.NewAPIVersionHandler(Codecs, version, discovery.APIResourceListerFunc(func() []metav1.APIResource {
-		return apiResourcesForDiscovery
-	})))
+	c.versionHandler.setDiscovery(version, discovery.NewAPIVersionHandler(Codecs, version, resourceListerFunc))
 
 	return nil
 }

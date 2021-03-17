@@ -30,6 +30,7 @@ import (
 	utilvalidation "k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apiserver/pkg/util/webhook"
+	"k8s.io/kubernetes/pkg/api/legacyscheme"
 
 	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -173,24 +174,16 @@ func validateCustomResourceDefinitionVersion(version *apiextensions.CustomResour
 func validateCustomResourceDefinitionSpec(spec *apiextensions.CustomResourceDefinitionSpec, opts validationOptions, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 
-	if len(spec.Group) == 0 &&
-	(spec.Names.Kind == "Pod" ||
-	spec.Names.Kind == "Node") {
-		// No error: these are non-controlplane kubernetes types
-		// that we want to move up to the KCP CRDs 
-	} else if spec.Group == "apps" || spec.Group == "core" {
-		// No error: these are non-controlplane kubernetes types
-		// that we want to move up to the KCP CRDs 
-	} else if len(spec.Group) == 0 {
-		allErrs = append(allErrs, field.Required(fldPath.Child("group"), ""))
+	// HACK: Relax naming constraints when registering legacy schema resources through CRDs
+	// for the KCP scenario
+	if legacyscheme.Scheme.IsGroupRegistered(spec.Group) {
+		// No error: these are legacy schema kubernetes types
+		// that are not added in the controlplane schema
+		// and that we want to move up to the KCP as CRDs 
 	} else if errs := utilvalidation.IsDNS1123Subdomain(spec.Group); len(errs) > 0 {
-		if spec.Group != "apps" && spec.Group != "core" {
 			allErrs = append(allErrs, field.Invalid(fldPath.Child("group"), spec.Group, strings.Join(errs, ",")))
-		}
 	} else if len(strings.Split(spec.Group, ".")) < 2 {
-		if spec.Group != "apps" && spec.Group != "core" {
 			allErrs = append(allErrs, field.Invalid(fldPath.Child("group"), spec.Group, "should be a domain with at least one dot"))
-		}
 	}
 
 	allErrs = append(allErrs, validateEnumStrings(fldPath.Child("scope"), string(spec.Scope), []string{string(apiextensions.ClusterScoped), string(apiextensions.NamespaceScoped)}, true)...)

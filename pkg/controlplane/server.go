@@ -27,11 +27,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/emicklei/go-restful"
 	extensionsapiserver "k8s.io/apiextensions-apiserver/pkg/apiserver"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	"k8s.io/apiserver/pkg/authorization/union"
+	"k8s.io/apiserver/pkg/endpoints/discovery"
 	openapinamer "k8s.io/apiserver/pkg/endpoints/openapi"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	genericapiserver "k8s.io/apiserver/pkg/server"
@@ -111,6 +113,14 @@ func CreateServerChain(completedOptions completedServerRunOptions, stopCh <-chan
 		// we don't need special handling for innerStopCh because the aggregator server doesn't create any go routines
 		return nil, err
 	}
+
+	kubeAPIServer.GenericAPIServer.Handler.GoRestfulContainer.Filter(func(req *restful.Request, res *restful.Response, chain *restful.FilterChain){		
+		if discovery.IsAPIContributed(req.Request.URL.Path) {
+			apiExtensionsServer.GenericAPIServer.Handler.NonGoRestfulMux.ServeHTTP(res.ResponseWriter, req.Request)
+		} else {
+			chain.ProcessFilter(req, res)
+		}
+	})
 
 	return aggregatorServer, nil
 }

@@ -18,6 +18,8 @@ package discovery
 
 import (
 	"net/http"
+	"regexp"
+	"strings"
 
 	restful "github.com/emicklei/go-restful"
 
@@ -47,6 +49,45 @@ type APIVersionHandler struct {
 	apiResourceLister APIResourceLister
 }
 
+// HACK: support the case when we can add core or other legacy scheme resources through CRDs (KCP scenario)
+var ContributedResources map[schema.GroupVersion]APIResourceLister = map[schema.GroupVersion]APIResourceLister{}
+
+func withContributedResources(groupVersion schema.GroupVersion, apiResourceLister APIResourceLister) APIResourceLister {
+	return APIResourceListerFunc(func() []metav1.APIResource {
+		result := apiResourceLister.ListAPIResources()
+		if additionalResources := ContributedResources[groupVersion]; additionalResources != nil {
+			result = append(result, additionalResources.ListAPIResources()...)
+		}
+		return result
+	})
+} 
+
+func IsAPIContributed(path string) bool {
+	for gv, resourceLister := range ContributedResources {
+		prefix := gv.Group
+		if prefix != "" {
+			prefix = "/apis/" + prefix + "/" + gv.Version + "/"
+		} else { 
+			prefix = "/api/" + gv.Version + "/"
+		}
+		if !strings.HasPrefix(path, prefix) {
+			return false
+		}
+
+		for _, resource := range resourceLister.ListAPIResources() {
+			if strings.HasPrefix(path, prefix + resource.Name) {
+				return true
+			}
+			if resource.Namespaced {
+				if matched, _ := regexp.MatchString(prefix + "namespaces/[^/][^/]*/" + resource.Name + "(/[^/].*)?", path); matched {
+					return true
+				}
+			} 
+		} 
+	}
+	return false
+}
+
 func NewAPIVersionHandler(serializer runtime.NegotiatedSerializer, groupVersion schema.GroupVersion, apiResourceLister APIResourceLister) *APIVersionHandler {
 	if keepUnversioned(groupVersion.Group) {
 		// Because in release 1.1, /apis/extensions returns response with empty
@@ -58,7 +99,7 @@ func NewAPIVersionHandler(serializer runtime.NegotiatedSerializer, groupVersion 
 	return &APIVersionHandler{
 		serializer:        serializer,
 		groupVersion:      groupVersion,
-		apiResourceLister: apiResourceLister,
+		apiResourceLister: withContributedResources(groupVersion, apiResourceLister),
 	}
 }
 
