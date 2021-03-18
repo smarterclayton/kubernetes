@@ -13,20 +13,19 @@ require (
 	github.com/Azure/go-autorest/autorest/adal v0.5.0
 	github.com/Azure/go-autorest/autorest/to v0.2.0
 	github.com/GoogleCloudPlatform/k8s-cloud-provider v0.0.0-20190822182118-27a4ced34534
-	github.com/JeffAshton/win_pdh v0.0.0-20161109143554-76bb4ee9f0ab
-	github.com/Microsoft/go-winio v0.4.14
-	github.com/Microsoft/hcsshim v0.0.0-20190417211021-672e52e9209d
+	github.com/JeffAshton/win_pdh v0.0.0-20161109143554-76bb4ee9f0ab // indirect
+	github.com/Microsoft/go-winio v0.4.14 // indirect
+	github.com/Microsoft/hcsshim v0.0.0-20190417211021-672e52e9209d // indirect
 	github.com/PuerkitoBio/purell v1.1.1
 	github.com/Rican7/retry v0.1.0 // indirect
 	github.com/armon/circbuf v0.0.0-20150827004946-bbbad097214e
 	github.com/auth0/go-jwt-middleware v0.0.0-20170425171159-5493cabe49f7 // indirect
 	github.com/aws/aws-sdk-go v1.28.2
-	github.com/bazelbuild/bazel-gazelle v0.19.1-0.20191105222053-70208cbdc798
-	github.com/bazelbuild/buildtools v0.0.0-20190917191645-69366ca98f89
+	github.com/bazelbuild/bazel-gazelle v0.19.1-0.20191105222053-70208cbdc798 // indirect
 	github.com/blang/semver v3.5.0+incompatible
 	github.com/boltdb/bolt v1.3.1 // indirect
 	github.com/caddyserver/caddy v1.0.3
-	github.com/cespare/prettybench v0.0.0-20150116022406-03b8cfe5406c
+	github.com/cespare/prettybench v0.0.0-20150116022406-03b8cfe5406c // indirect
 	github.com/checkpoint-restore/go-criu v0.0.0-20181120144056-17b0214f6c48 // indirect
 	github.com/cilium/ebpf v0.0.0-20191025125908-95b36a581eed // indirect
 	github.com/client9/misspell v0.3.4
@@ -53,7 +52,7 @@ require (
 	github.com/euank/go-kmsg-parser v2.0.0+incompatible // indirect
 	github.com/evanphx/json-patch v4.2.0+incompatible
 	github.com/fsnotify/fsnotify v1.4.7
-	github.com/go-bindata/go-bindata v3.1.1+incompatible
+	github.com/go-bindata/go-bindata v3.1.1+incompatible // indirect
 	github.com/go-openapi/analysis v0.19.5
 	github.com/go-openapi/loads v0.19.4
 	github.com/go-openapi/spec v0.19.3
@@ -65,7 +64,7 @@ require (
 	github.com/golang/groupcache v0.0.0-20160516000752-02826c3e7903
 	github.com/golang/mock v1.3.1
 	github.com/google/cadvisor v0.35.0
-	github.com/google/go-cmp v0.3.0
+	github.com/google/go-cmp v0.5.2
 	github.com/google/gofuzz v1.1.0
 	github.com/google/uuid v1.1.1
 	github.com/googleapis/gnostic v0.1.0
@@ -89,8 +88,8 @@ require (
 	github.com/mrunalp/fileutils v0.0.0-20171103030105-7d4729fb3618 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822
 	github.com/mvdan/xurls v1.1.0
-	github.com/onsi/ginkgo v1.11.0
-	github.com/onsi/gomega v1.7.0
+	github.com/onsi/ginkgo v1.14.1
+	github.com/onsi/gomega v1.10.2
 	github.com/opencontainers/go-digest v1.0.0-rc1
 	github.com/opencontainers/image-spec v1.0.1 // indirect
 	github.com/opencontainers/runc v1.0.0-rc10
@@ -108,7 +107,7 @@ require (
 	github.com/sirupsen/logrus v1.4.2
 	github.com/smartystreets/goconvey v1.6.4 // indirect
 	github.com/spf13/afero v1.2.2
-	github.com/spf13/cobra v0.0.5
+	github.com/spf13/cobra v1.1.1
 	github.com/spf13/jwalterweatherman v1.1.0 // indirect
 	github.com/spf13/pflag v1.0.5
 	github.com/spf13/viper v1.3.2
@@ -122,12 +121,11 @@ require (
 	github.com/vmware/govmomi v0.20.3
 	go.etcd.io/etcd v0.0.0-20191023171146-3cf2f69b5738
 	golang.org/x/crypto v0.0.0-20200220183623-bac4c82f6975
-	golang.org/x/lint v0.0.0-20190409202823-959b441ac422
 	golang.org/x/net v0.0.0-20191004110552-13f9640d40b9
 	golang.org/x/oauth2 v0.0.0-20190604053449-0f29369cfe45
 	golang.org/x/sys v0.0.0-20191022100944-742c48ecaeb7
 	golang.org/x/time v0.0.0-20190308202827-9d24e82272b4
-	golang.org/x/tools v0.0.0-20190920225731-5eefd052ad72
+	golang.org/x/tools v0.0.0-20200616133436-c1934b75d054
 	gonum.org/v1/gonum v0.6.2
 	gonum.org/v1/netlib v0.0.0-20190331212654-76723241ea4e // indirect
 	google.golang.org/api v0.6.1-0.20190607001116-5213b8090861
@@ -136,11 +134,11 @@ require (
 	gopkg.in/square/go-jose.v2 v2.2.2
 	gopkg.in/yaml.v2 v2.2.8
 	gotest.tools v2.2.0+incompatible
-	gotest.tools/gotestsum v0.3.5
-	honnef.co/go/tools v0.0.1-2019.2.2
-	k8s.io/api v0.0.0
-	k8s.io/apiextensions-apiserver v0.0.0
-	k8s.io/apimachinery v0.0.0
+	gotest.tools/gotestsum v0.3.5 // indirect
+	honnef.co/go/tools v0.0.1-2019.2.2 // indirect
+	k8s.io/api v0.20.2
+	k8s.io/apiextensions-apiserver v0.20.2
+	k8s.io/apimachinery v0.20.2
 	k8s.io/apiserver v0.0.0
 	k8s.io/cli-runtime v0.0.0
 	k8s.io/client-go v0.0.0
@@ -162,10 +160,11 @@ require (
 	k8s.io/kubelet v0.0.0
 	k8s.io/legacy-cloud-providers v0.0.0
 	k8s.io/metrics v0.0.0
-	k8s.io/repo-infra v0.0.1-alpha.1
+	k8s.io/repo-infra v0.0.1-alpha.1 // indirect
 	k8s.io/sample-apiserver v0.0.0
 	k8s.io/system-validators v1.0.4
 	k8s.io/utils v0.0.0-20200324210504-a9aa75ae1b89
+	sigs.k8s.io/controller-tools v0.5.0 // indirect
 	sigs.k8s.io/kustomize v2.0.3+incompatible
 	sigs.k8s.io/yaml v1.2.0
 )

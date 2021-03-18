@@ -70,6 +70,7 @@ import (
 	"k8s.io/apiserver/pkg/endpoints/handlers/fieldmanager"
 	"k8s.io/apiserver/pkg/endpoints/handlers/responsewriters"
 	"k8s.io/apiserver/pkg/endpoints/metrics"
+	"k8s.io/apiserver/pkg/endpoints/openapi"
 	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/registry/generic"
@@ -772,12 +773,16 @@ func (r *crdHandler) getOrCreateServingInfoFor(uid types.UID, name string) (*crd
 			table,
 		)
 
+		selfLinkPrefixPrefix := path.Join("apis", crd.Spec.Group, v.Name)
+		if crd.Spec.Group == "" {
+			selfLinkPrefixPrefix = path.Join("api", v.Name)
+		}
 		selfLinkPrefix := ""
 		switch crd.Spec.Scope {
 		case apiextensionsv1.ClusterScoped:
-			selfLinkPrefix = "/" + path.Join("apis", crd.Spec.Group, v.Name) + "/" + crd.Status.AcceptedNames.Plural + "/"
+			selfLinkPrefix = "/" + selfLinkPrefixPrefix + "/" + crd.Status.AcceptedNames.Plural + "/"
 		case apiextensionsv1.NamespaceScoped:
-			selfLinkPrefix = "/" + path.Join("apis", crd.Spec.Group, v.Name, "namespaces") + "/"
+			selfLinkPrefix = "/" + selfLinkPrefixPrefix + "/namespaces/"
 		}
 
 		clusterScoped := crd.Spec.Scope == apiextensionsv1.ClusterScoped
@@ -799,6 +804,10 @@ func (r *crdHandler) getOrCreateServingInfoFor(uid types.UID, name string) (*crd
 			standardSerializers = append(standardSerializers, s)
 		}
 
+		modelsByGKV, err := openapi.GetModelsByGKV(openAPIModels)
+		if err != nil {
+			klog.V(2).Infof("The CRD cannot gather openapi models by GKV: %v", err)
+		}
 		requestScopes[v.Name] = &handlers.RequestScope{
 			Namer: handlers.ContextBasedNaming{
 				SelfLinker:         meta.NewAccessor(),
@@ -830,6 +839,8 @@ func (r *crdHandler) getOrCreateServingInfoFor(uid types.UID, name string) (*crd
 			Authorizer: r.authorizer,
 
 			MaxRequestBodyBytes: r.maxRequestBodyBytes,
+
+			OpenapiModels: modelsByGKV,
 		}
 		if utilfeature.DefaultFeatureGate.Enabled(features.ServerSideApply) {
 			reqScope := *requestScopes[v.Name]
@@ -1255,7 +1266,7 @@ func buildOpenAPIModelsForApply(staticOpenAPISpec *spec.Swagger, crd *apiextensi
 
 	specs := []*spec.Swagger{}
 	for _, v := range crd.Spec.Versions {
-		s, err := builder.BuildSwagger(crd, v.Name, builder.Options{V2: false, StripDefaults: true, StripValueValidation: true, StripNullable: true, AllowNonStructural: true})
+		s, err := builder.BuildSwagger(crd, v.Name, builder.Options{V2: false, StripDefaults: true, StripValueValidation: true, StripNullable: true, AllowNonStructural: false})
 		if err != nil {
 			return nil, err
 		}

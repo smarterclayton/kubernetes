@@ -48,6 +48,7 @@ import (
 	"k8s.io/apiserver/pkg/registry/rest"
 	"k8s.io/apiserver/pkg/util/dryrun"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	"k8s.io/kube-openapi/pkg/util/proto"
 	utiltrace "k8s.io/utils/trace"
 	"sigs.k8s.io/yaml"
 )
@@ -383,6 +384,7 @@ type smpPatcher struct {
 	// Schema
 	schemaReferenceObj runtime.Object
 	fieldManager       *fieldmanager.FieldManager
+	openapiModel       proto.Schema
 }
 
 func (p *smpPatcher) applyPatchToCurrentObject(currentObject runtime.Object) (runtime.Object, error) {
@@ -396,7 +398,7 @@ func (p *smpPatcher) applyPatchToCurrentObject(currentObject runtime.Object) (ru
 	if err != nil {
 		return nil, err
 	}
-	if err := strategicPatchObject(p.defaulter, currentVersionedObject, p.patchBytes, versionedObjToUpdate, p.schemaReferenceObj); err != nil {
+	if err := strategicPatchObject(p.defaulter, currentVersionedObject, p.patchBytes, versionedObjToUpdate, p.schemaReferenceObj, p.openapiModel); err != nil {
 		return nil, err
 	}
 	// Convert the object back to the hub version
@@ -459,6 +461,7 @@ func strategicPatchObject(
 	patchBytes []byte,
 	objToUpdate runtime.Object,
 	schemaReferenceObj runtime.Object,
+	openapiModel proto.Schema,
 ) error {
 	originalObjMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(originalObject)
 	if err != nil {
@@ -470,7 +473,7 @@ func strategicPatchObject(
 		return errors.NewBadRequest(err.Error())
 	}
 
-	if err := applyPatchToObject(defaulter, originalObjMap, patchMap, objToUpdate, schemaReferenceObj); err != nil {
+	if err := applyPatchToObject(defaulter, originalObjMap, patchMap, objToUpdate, schemaReferenceObj, openapiModel); err != nil {
 		return err
 	}
 	return nil
@@ -556,10 +559,17 @@ func (p *patcher) patchResource(ctx context.Context, scope *RequestScope) (runti
 		if err != nil {
 			return nil, false, err
 		}
+
+		var schema proto.Schema 
+		modelsByGKV := scope.OpenapiModels
+		if modelsByGKV != nil {
+			schema = modelsByGKV[p.kind]
+		}
 		p.mechanism = &smpPatcher{
 			patcher:            p,
 			schemaReferenceObj: schemaReferenceObj,
 			fieldManager:       scope.FieldManager,
+			openapiModel: schema,
 		}
 	// this case is unreachable if ServerSideApply is not enabled because we will have already rejected the content type
 	case types.ApplyPatchType:
@@ -612,8 +622,12 @@ func applyPatchToObject(
 	patchMap map[string]interface{},
 	objToUpdate runtime.Object,
 	schemaReferenceObj runtime.Object,
+	openapiModel proto.Schema,
 ) error {
 	patchedObjMap, err := strategicpatch.StrategicMergeMapPatch(originalMap, patchMap, schemaReferenceObj)
+	if err == mergepatch.ErrUnsupportedStrategicMergePatchFormat && openapiModel !=nil {
+		patchedObjMap, err = strategicpatch.StrategicMergeMapPatchUsingLookupPatchMeta(originalMap, patchMap, strategicpatch.NewPatchMetaFromOpenAPI(openapiModel))
+	}
 	if err != nil {
 		return interpretStrategicMergePatchError(err)
 	}
