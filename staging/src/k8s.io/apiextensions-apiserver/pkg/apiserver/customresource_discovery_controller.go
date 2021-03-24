@@ -187,11 +187,9 @@ func (c *DiscoveryController) sync(version schema.GroupVersion) error {
 	if legacyscheme.Scheme.IsGroupRegistered(version.Group) {
 		if !foundGroup || !foundVersion{
 			delete(discovery.ContributedResources, version)			
-			return nil
 		}
 	
 		discovery.ContributedResources[version] = resourceListerFunc
-		return nil
 	}
 
 	if !foundGroup {
@@ -200,20 +198,23 @@ func (c *DiscoveryController) sync(version schema.GroupVersion) error {
 		return nil
 	}
 
-	apiGroup := metav1.APIGroup{
-		Name:     version.Group,
-		Versions: apiVersionsForDiscovery,
-		// the preferred versions for a group is the first item in
-		// apiVersionsForDiscovery after it put in the right ordered
-		PreferredVersion: apiVersionsForDiscovery[0],
+	if version.Group != "" {
+		// If we don't add resources in the core API group
+		apiGroup := metav1.APIGroup{
+			Name:     version.Group,
+			Versions: apiVersionsForDiscovery,
+			// the preferred versions for a group is the first item in
+			// apiVersionsForDiscovery after it put in the right ordered
+			PreferredVersion: apiVersionsForDiscovery[0],
+		}
+		c.groupHandler.setDiscovery(version.Group, discovery.NewAPIGroupHandler(Codecs, apiGroup))
+	
+		if !foundVersion {
+			c.versionHandler.unsetDiscovery(version)
+			return nil
+		}
+		c.versionHandler.setDiscovery(version, discovery.NewAPIVersionHandler(Codecs, version, resourceListerFunc))
 	}
-	c.groupHandler.setDiscovery(version.Group, discovery.NewAPIGroupHandler(Codecs, apiGroup))
-
-	if !foundVersion {
-		c.versionHandler.unsetDiscovery(version)
-		return nil
-	}
-	c.versionHandler.setDiscovery(version, discovery.NewAPIVersionHandler(Codecs, version, resourceListerFunc))
 
 	return nil
 }
