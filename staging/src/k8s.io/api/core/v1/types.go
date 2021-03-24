@@ -3141,8 +3141,7 @@ const (
 // pod's hosts file.
 type HostAlias struct {
 	// IP address of the host file entry.
-	// +kubebuilder:validation:Required
-	IP string `json:"ip,omitempty" protobuf:"bytes,1,opt,name=ip"`
+	IP string `json:"ip" protobuf:"bytes,1,opt,name=ip"`
 	// Hostnames for the above IP address.
 	Hostnames []string `json:"hostnames,omitempty" protobuf:"bytes,2,rep,name=hostnames"`
 }
@@ -3277,8 +3276,7 @@ type PodDNSConfigOption struct {
 //    IP: An IP address allocated to the pod. Routable at least within the cluster.
 type PodIP struct {
 	// ip is an IP address (IPv4 or IPv6) assigned to the pod
-	// +kubebuilder:validation:Required
-	IP string `json:"ip,omitempty" protobuf:"bytes,1,opt,name=ip"`
+	IP string `json:"ip" protobuf:"bytes,1,opt,name=ip"`
 }
 
 // EphemeralContainerCommon is a copy of all fields in Container to be inlined in
@@ -4688,7 +4686,6 @@ type ResourceList map[ResourceName]resource.Quantity
 // +genclient
 // +genclient:nonNamespaced
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster
 
@@ -5134,8 +5131,7 @@ type LocalObjectReference struct {
 	// Name of the referent.
 	// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
 	// TODO: Add other useful fields. apiVersion, kind, uid?
-	// +kubebuilder:validation:Required
-	Name string `json:"name,omitempty" protobuf:"bytes,1,opt,name=name"`
+	Name string `json:"name" protobuf:"bytes,1,opt,name=name"`
 }
 
 // TypedLocalObjectReference contains enough information to let you locate the
