@@ -146,7 +146,7 @@ func BuildSwagger(crd *apiextensionsv1.CustomResourceDefinition, version string,
 	routes := make([]*restful.RouteBuilder, 0)
 	// HACK: support the case when we add core resources through CRDs (KCP scenario)
 	rootPrefix := fmt.Sprintf("/apis/%s/%s", b.group, b.version)
-	if b.group == "core" {
+	if b.group == "" {
 		rootPrefix = fmt.Sprintf("/api/%s", b.version)
 	}
 
@@ -206,7 +206,10 @@ type CRDCanonicalTypeNamer struct {
 // HACK: support the case when we add core or other legacy scheme resources through CRDs (KCP scenario)
 func packagePrefix(group string) string {
 	if !strings.Contains(group, ".") &&
-	(group == "core" || legacyscheme.Scheme.IsGroupRegistered(group)) {
+	legacyscheme.Scheme.IsGroupRegistered(group) {
+		if group == "" {
+			group = "core"
+		} 
 		return "k8s.io/api/" + group
 	}
 	return group
@@ -529,9 +532,6 @@ func (b *builder) getOpenAPIConfig() *common.Config {
 func newBuilder(crd *apiextensionsv1.CustomResourceDefinition, version string, schema *structuralschema.Structural, v2 bool) *builder {
 	group := crd.Spec.Group
 	// HACK: support the case when we add core resources through CRDs (KCP scenario)
-	if group == "" {
-		group = "core"
-	}
 	b := &builder{
 		schema: &spec.Schema{
 			SchemaProps: spec.SchemaProps{Type: []string{"object"}},
