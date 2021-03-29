@@ -19,6 +19,7 @@ package discovery
 import (
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 
 	restful "github.com/emicklei/go-restful"
@@ -58,16 +59,20 @@ func withContributedResources(groupVersion schema.GroupVersion, apiResourceListe
 		if additionalResources := ContributedResources[groupVersion]; additionalResources != nil {
 			result = append(result, additionalResources.ListAPIResources()...)
 		}
+		sort.Slice(result, func(i, j int) bool {
+			return result[i].Name < result[j].Name
+		})
+
 		return result
 	})
-} 
+}
 
 func IsAPIContributed(path string) bool {
 	for gv, resourceLister := range ContributedResources {
 		prefix := gv.Group
 		if prefix != "" {
 			prefix = "/apis/" + prefix + "/" + gv.Version + "/"
-		} else { 
+		} else {
 			prefix = "/api/" + gv.Version + "/"
 		}
 		if !strings.HasPrefix(path, prefix) {
@@ -75,15 +80,15 @@ func IsAPIContributed(path string) bool {
 		}
 
 		for _, resource := range resourceLister.ListAPIResources() {
-			if strings.HasPrefix(path, prefix + resource.Name) {
+			if strings.HasPrefix(path, prefix+resource.Name) {
 				return true
 			}
 			if resource.Namespaced {
-				if matched, _ := regexp.MatchString(prefix + "namespaces/[^/][^/]*/" + resource.Name + "(/[^/].*)?", path); matched {
+				if matched, _ := regexp.MatchString(prefix+"namespaces/[^/][^/]*/"+resource.Name+"(/[^/].*)?", path); matched {
 					return true
 				}
-			} 
-		} 
+			}
+		}
 	}
 	return false
 }
