@@ -368,6 +368,10 @@ func (c *NamingConditionController) deleteCustomResourceDefinition(obj interface
 
 func (c *NamingConditionController) requeueAllOtherGroupCRDs(name string) error {
 	pluralGroup := strings.SplitN(name, ".", 2)
+	// In case the group is empty because we're adding core resources as CRDs in KCP   
+	if len(pluralGroup) == 1 {
+		pluralGroup = append(pluralGroup, "")
+	}
 	list, err := c.crdLister.List(labels.Everything())
 	if err != nil {
 		return err

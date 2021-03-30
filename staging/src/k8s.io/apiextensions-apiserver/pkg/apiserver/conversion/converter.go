@@ -115,6 +115,8 @@ func (c *crConverter) ConvertFieldLabel(gvk schema.GroupVersionKind, label, valu
 		return label, value, nil
 	case !c.clusterScoped && label == "metadata.namespace":
 		return label, value, nil
+	case gvk.Kind == "Pod" && label == "spec.nodeName":
+		return label, value, nil
 	default:
 		return "", "", fmt.Errorf("field label not supported: %s", label)
 	}

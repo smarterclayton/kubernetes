@@ -615,7 +615,7 @@ func (e *Store) Get(ctx context.Context, name string, options *metav1.GetOptions
 	if err != nil {
 		return nil, err
 	}
-	klog.Infof("DEBUG: GET key func returned: %s", key)
+//	klog.Infof("DEBUG: GET key func returned: %s", key)
 	if err := e.Storage.Get(ctx, key, options.ResourceVersion, obj, false); err != nil {
 		return nil, storeerr.InterpretGetError(err, e.qualifiedResourceFromContext(ctx), name)
 	}
