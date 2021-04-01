@@ -110,7 +110,9 @@ kubernetes.tar.gz
 # generated files in any directory
 # TODO(thockin): uncomment this when we stop committing the generated files.
 #zz_generated.*
-zz_generated.openapi.go
+# HACK: Needed for short term dependencies on core openapi docs, will need to be refactored
+#       out of api dependencies in order to vendor a "pure" Kube API
+# zz_generated.openapi.go
 zz_generated_*_test.go
 
 # TODO(roycaihw): remove this when we stop committing the generated definition
