@@ -56,9 +56,10 @@ func NewAPIVersionHandler(serializer runtime.NegotiatedSerializer, groupVersion 
 	}
 
 	return &APIVersionHandler{
-		serializer:        serializer,
-		groupVersion:      groupVersion,
-		apiResourceLister: apiResourceLister,
+		serializer:   serializer,
+		groupVersion: groupVersion,
+		// HACK: support the case when we can add core or other legacy scheme resources through CRDs (KCP scenario)
+		apiResourceLister: withContributedResources(groupVersion, apiResourceLister),
 	}
 }
 
