@@ -1226,7 +1226,7 @@ func createPodWithGenericEphemeralVolume() *api.Pod {
 	}
 }
 
-func newPodtWithHugePageValue(reousreceName api.ResourceName, value resource.Quantity) *api.Pod {
+func newPodWithHugePageValue(resourceName api.ResourceName, value resource.Quantity) *api.Pod {
 	return &api.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace:       "default",
@@ -1244,11 +1244,11 @@ func newPodtWithHugePageValue(reousreceName api.ResourceName, value resource.Qua
 				Resources: api.ResourceRequirements{
 					Requests: api.ResourceList{
 						api.ResourceCPU: resource.MustParse("10"),
-						reousreceName:   value,
+						resourceName:    value,
 					},
 					Limits: api.ResourceList{
 						api.ResourceCPU: resource.MustParse("10"),
-						reousreceName:   value,
+						resourceName:    value,
 					},
 				}},
 			},
@@ -1264,7 +1264,7 @@ func TestPodStrategyValidate(t *testing.T) {
 	}{
 		{
 			name: "a new pod setting container with indivisible hugepages values",
-			pod:  newPodtWithHugePageValue(api.ResourceHugePagesPrefix+"1Mi", resource.MustParse("1.1Mi")),
+			pod:  newPodWithHugePageValue(api.ResourceHugePagesPrefix+"1Mi", resource.MustParse("1.1Mi")),
 		},
 		{
 			name: "a new pod setting init-container with indivisible hugepages values",
@@ -1396,8 +1396,8 @@ func TestPodStrategyValidateUpdate(t *testing.T) {
 	}{
 		{
 			name:   "an existing pod with indivisible hugepages values to a new pod with indivisible hugepages values",
-			newPod: newPodtWithHugePageValue(api.ResourceHugePagesPrefix+"2Mi", resource.MustParse("2.1Mi")),
-			oldPod: newPodtWithHugePageValue(api.ResourceHugePagesPrefix+"2Mi", resource.MustParse("2.1Mi")),
+			newPod: newPodWithHugePageValue(api.ResourceHugePagesPrefix+"2Mi", resource.MustParse("2.1Mi")),
+			oldPod: newPodWithHugePageValue(api.ResourceHugePagesPrefix+"2Mi", resource.MustParse("2.1Mi")),
 		},
 	}
 
