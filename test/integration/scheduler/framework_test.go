@@ -1850,6 +1850,7 @@ func TestPreemptWithPermitPlugin(t *testing.T) {
 	testCtx := initTestSchedulerForFrameworkTest(t, testutils.InitTestAPIServer(t, "preempt-with-permit-plugin", nil), 0,
 		scheduler.WithProfiles(prof),
 		scheduler.WithFrameworkOutOfTreeRegistry(registry))
+	testutils.StartFakeKubeletDelete(testCtx.Ctx, testCtx.ClientSet)
 	defer testutils.CleanupTest(t, testCtx)
 
 	// Add one node.
@@ -1934,7 +1935,7 @@ func TestPreemptWithPermitPlugin(t *testing.T) {
 		t.Error("Get running pod failed.")
 	}
 	if err == nil {
-		t.Error("Running pod still exist.")
+		t.Errorf("Running pod still exist: %#v", runningPod)
 	}
 	if permitPlugin.numPermitCalled == 0 {
 		t.Errorf("Expected the permit plugin to be called.")
