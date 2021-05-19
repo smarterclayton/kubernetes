@@ -1126,7 +1126,11 @@ github.com/pquerna/cachecontrol
 # github.com/pquerna/cachecontrol => github.com/pquerna/cachecontrol v0.0.0-20171018203845-0dec1b30a021
 github.com/pquerna/cachecontrol/cacheobject
 # github.com/prometheus/client_golang v1.7.1 => github.com/prometheus/client_golang v1.7.1
+<<<<<<< HEAD
 # github.com/prometheus/client_golang => github.com/prometheus/client_golang v1.7.1
+=======
+## explicit
+>>>>>>> 2d361d43063 (e2e: Flag questionable durations in container status on termination)
 github.com/prometheus/client_golang/prometheus
 github.com/prometheus/client_golang/prometheus/internal
 github.com/prometheus/client_golang/prometheus/promhttp
