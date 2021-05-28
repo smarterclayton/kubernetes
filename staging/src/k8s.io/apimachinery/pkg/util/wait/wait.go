@@ -221,8 +221,75 @@ func Jitter(duration time.Duration, maxFactor float64) time.Duration {
 	return wait
 }
 
-// ErrWaitTimeout is returned when the condition exited without success.
-var ErrWaitTimeout = errors.New("timed out waiting for the condition")
+// ErrWaitTimeout is returned when the condition was not satisfied in time.
+//
+// Deprecated: This type will be made private in 1.28 in favor of WaitEndedEarly
+// for checking errors or WrapEndedEarly(err) for returning a typed error.
+var ErrWaitTimeout = ErrorEndedEarly(errors.New("timed out waiting for the condition"))
+
+// EndedEarly returns true if the error returned by Poll or ExponentialBackoff
+// methods indicates the condition was not successful within the method execution.
+// Callers should use this method instead of comparing the error value directly to
+// ErrWaitTimeout, as methods that cancel a context may not return that error.
+//
+// Instead of:
+//
+//	err := wait.Poll(...)
+//	if err == wait.ErrWaitTimeout {
+//	    log.Infof("Wait for operation exceeded")
+//	} else ...
+//
+// Use:
+//
+//	err := wait.Poll(...)
+//	if wait.EndedEarly(err) {
+//	    log.Infof("Wait for operation exceeded")
+//	} else ...
+func EndedEarly(err error) bool {
+	switch {
+	case errors.Is(err, errErrWaitTimeout),
+		errors.Is(err, context.Canceled),
+		errors.Is(err, context.DeadlineExceeded):
+		return true
+	default:
+		return false
+	}
+}
+
+// errEndedEarly
+type errEndedEarly struct {
+	cause error
+}
+
+// ErrorEndedEarly returns an error that indicates the wait was ended
+// early for a given reason. If no cause is provided a generic error
+// will be used but callers are encouraged to provide a real cause for
+// clarity in debugging.
+func ErrorEndedEarly(cause error) error {
+	switch cause.(type) {
+	case errEndedEarly:
+		// no need to wrap twice since errEndedEarly is only needed
+		// once in a chain
+		return cause
+	default:
+		return errEndedEarly{cause}
+	}
+}
+
+// errErrWaitTimeout is the private version of the previous ErrWaitTimeout
+// and is private to prevent direct comparison. Use ErrorEndedEarly(...)
+// instead.
+var errErrWaitTimeout = errEndedEarly{}
+
+func (e errEndedEarly) Unwrap() error        { return e.cause }
+func (e errEndedEarly) Is(target error) bool { return target == errErrWaitTimeout }
+func (e errEndedEarly) Error() string {
+	if e.cause == nil {
+		// returns the same error message as before
+		return "timed out waiting for the condition"
+	}
+	return e.cause.Error()
+}
 
 // ConditionFunc returns true if the condition is satisfied, or an error
 // if the loop should be aborted.
@@ -383,17 +450,126 @@ func (b *backoffManager) Step() time.Duration {
 // 3. a sleep truncated by the cap on duration has been completed.
 // In case (1) the returned error is what the condition function returned.
 // In all other cases, ErrWaitTimeout is returned.
+//
+// Since backoffs are often subject to cancellation, we recommend using
+// ExponentialBackoffWithContext and passing a context to the method.
 func ExponentialBackoff(backoff Backoff, condition ConditionFunc) error {
+	return ExponentialBackoffWithContext(context.Background(), backoff, condition.WithContext())
+}
+
+// ExponentialBackoffWithContext repeats a condition check with exponential backoff.
+// It immediately returns an error if the condition returns an error, the context is cancelled
+// or hits the deadline, or if the maximum attempts defined in backoff is exceeded (ErrWaitTimeout).
+// If an error is returned by the condition the backoff stops immediately. The condition will
+// never be invoked more than backoff.Steps times.
+func ExponentialBackoffWithContext(ctx context.Context, backoff Backoff, condition ConditionWithContextFunc) error {
+	// lazily initialize and reuse the timer
+	var after *time.Timer
+	defer func() {
+		if after != nil {
+			after.Stop()
+		}
+	}()
+
 	for backoff.Steps > 0 {
-		if ok, err := runConditionWithCrashProtection(condition); err != nil || ok {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		if ok, err := runConditionWithCrashProtectionWithContext(ctx, condition); err != nil || ok {
 			return err
 		}
+
 		if backoff.Steps == 1 {
 			break
 		}
-		time.Sleep(backoff.Step())
+
+		waitBeforeRetry := backoff.Step()
+		if waitBeforeRetry == 0 {
+			continue
+		}
+		if after == nil {
+			after = timeNewTimer(waitBeforeRetry)
+		} else {
+			after.Reset(waitBeforeRetry)
+		}
+
+		select {
+		case <-after.C:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
+
 	return ErrWaitTimeout
+}
+
+// PollUntilContextCancel tries a condition func until it returns true, an error, or the context
+// is cancelled or hits a deadline. condition will be invoked after the first interval if the
+// context is not cancelled first. The returned error will be from ctx.Err(), the condition's
+// err return value, or nil. If invoking condition takes longer than interval the next condition
+// will be invoked immediately. When using very short intervals, condition may be invoked multiple
+// times before a context cancellation is detected. If immediate is true, condition will be
+// invoked before waiting and guarantees that condition is invoked at least once, regardless of
+// whether the context has been cancelled.
+func PollUntilContextCancel(ctx context.Context, interval time.Duration, immediate bool, condition ConditionWithContextFunc) error {
+	return pollUntilContextCancel(ctx, immediate, interval, condition)
+}
+
+// PollUntilContextTimeout will terminate polling after timeout duration by setting a context
+// timeout. This is provided as a convenience function for callers not currently executing under
+// a deadline and is equivalent to:
+//
+//	deadlineCtx, deadlineCancel := context.WithTimeout(ctx, timeout)
+//	err := PollUntilContextCancel(ctx, interval, immediate, condition)
+//
+// The deadline context will be cancelled if the Poll succeeds before the timeout, simplifying
+// inline usage. All other behavior is identical to PollWithContextTimeout.
+func PollUntilContextTimeout(ctx context.Context, interval, timeout time.Duration, immediate bool, condition ConditionWithContextFunc) error {
+	deadlineCtx, deadlineCancel := context.WithTimeout(ctx, timeout)
+	defer deadlineCancel()
+	return pollUntilContextCancel(deadlineCtx, immediate, interval, condition)
+}
+
+var (
+	// timeNewTicker is used for test injection of tickers
+	timeNewTicker func(time.Duration) *time.Ticker = time.NewTicker
+	// timeNewTicker is used for test injection of timers
+	timeNewTimer func(time.Duration) *time.Timer = time.NewTimer
+)
+
+// pollUntilContextCancel invokes condition until it is satisfied, the context is cancelled, or an
+// error occurs. If immediate is true, the condition will be invoked before beginning the wait loop,
+// otherwise there is no guarantee that condition will be invoked before returning.
+func pollUntilContextCancel(ctx context.Context, immediate bool, interval time.Duration, condition ConditionWithContextFunc) error {
+	if immediate {
+		done, err := runConditionWithCrashProtectionWithContext(ctx, condition)
+		if err != nil {
+			return err
+		}
+		if done {
+			return nil
+		}
+	}
+
+	tick := timeNewTicker(interval)
+	defer tick.Stop()
+	for {
+		select {
+		case <-tick.C:
+			ok, err := runConditionWithCrashProtectionWithContext(ctx, condition)
+			if err != nil {
+				return err
+			}
+			if ok {
+				return nil
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }
 
 // Poll tries a condition func until it returns true, an error, or the timeout
@@ -406,6 +582,10 @@ func ExponentialBackoff(backoff Backoff, condition ConditionFunc) error {
 // window is too short.
 //
 // If you want to Poll something forever, see PollInfinite.
+//
+// Deprecated: Use PollWithContextCancel with a deadline context. Note that
+// the new method will no longer return ErrWaitTimeout and instead return errors
+// defined by the context package. Will be removed in 1.28.
 func Poll(interval, timeout time.Duration, condition ConditionFunc) error {
 	return PollWithContext(context.Background(), interval, timeout, condition.WithContext())
 }
@@ -421,6 +601,11 @@ func Poll(interval, timeout time.Duration, condition ConditionFunc) error {
 // window is too short.
 //
 // If you want to Poll something forever, see PollInfinite.
+//
+// Deprecated: This method does not return errors from context, use
+// PollWithContextCancel with a deadline context. Note that the new method
+// will no longer return ErrWaitTimeout and instead return errors defined by the
+// context package. Will be removed in 1.28.
 func PollWithContext(ctx context.Context, interval, timeout time.Duration, condition ConditionWithContextFunc) error {
 	return poll(ctx, false, poller(interval, timeout), condition)
 }
@@ -430,6 +615,10 @@ func PollWithContext(ctx context.Context, interval, timeout time.Duration, condi
 //
 // PollUntil always waits interval before the first run of 'condition'.
 // 'condition' will always be invoked at least once.
+//
+// Deprecated: Use PollWithContextCancel instead. Note that
+// the new method will no longer return ErrWaitTimeout and instead return errors
+// defined by the context package. Will be removed in 1.28.
 func PollUntil(interval time.Duration, condition ConditionFunc, stopCh <-chan struct{}) error {
 	ctx, cancel := ContextForChannel(stopCh)
 	defer cancel()
@@ -441,6 +630,10 @@ func PollUntil(interval time.Duration, condition ConditionFunc, stopCh <-chan st
 //
 // PollUntilWithContext always waits interval before the first run of 'condition'.
 // 'condition' will always be invoked at least once.
+//
+// Deprecated: This method does not return errors from context, use
+// PollWithContextCancel. Note that the new method will no longer return ErrWaitTimeout
+// and instead return errors defined by the context package. Will be removed in 1.28.
 func PollUntilWithContext(ctx context.Context, interval time.Duration, condition ConditionWithContextFunc) error {
 	return poll(ctx, false, poller(interval, 0), condition)
 }
@@ -451,6 +644,10 @@ func PollUntilWithContext(ctx context.Context, interval time.Duration, condition
 //
 // Some intervals may be missed if the condition takes too long or the time
 // window is too short.
+//
+// Deprecated: Use PollWithContextCancel without a deadline. Note that
+// the new method will no longer return ErrWaitTimeout and instead return errors
+// defined by the context package. Will be removed in 1.28.
 func PollInfinite(interval time.Duration, condition ConditionFunc) error {
 	return PollInfiniteWithContext(context.Background(), interval, condition.WithContext())
 }
@@ -461,6 +658,11 @@ func PollInfinite(interval time.Duration, condition ConditionFunc) error {
 //
 // Some intervals may be missed if the condition takes too long or the time
 // window is too short.
+//
+// Deprecated: This method does not return errors from context, use
+// PollWithContextCancel without a deadline. Note that the new method will no longer return
+// ErrWaitTimeout and instead return errors defined by the context package. Will be
+// removed in 1.28.
 func PollInfiniteWithContext(ctx context.Context, interval time.Duration, condition ConditionWithContextFunc) error {
 	return poll(ctx, false, poller(interval, 0), condition)
 }
@@ -475,6 +677,11 @@ func PollInfiniteWithContext(ctx context.Context, interval time.Duration, condit
 // window is too short.
 //
 // If you want to immediately Poll something forever, see PollImmediateInfinite.
+//
+// Deprecated: This method does not return errors from context, use
+// PollImmediateWithContextCancel without a deadline. Note that the new method will no longer
+// return ErrWaitTimeout and instead return errors defined by the context package. Will
+// be removed in 1.28.
 func PollImmediate(interval, timeout time.Duration, condition ConditionFunc) error {
 	return PollImmediateWithContext(context.Background(), interval, timeout, condition.WithContext())
 }
@@ -489,6 +696,11 @@ func PollImmediate(interval, timeout time.Duration, condition ConditionFunc) err
 // window is too short.
 //
 // If you want to immediately Poll something forever, see PollImmediateInfinite.
+//
+// Deprecated: This method does not return errors from context, use
+// PollImmediateWithContextCancel without a deadline. Note that the new method will no longer
+// return ErrWaitTimeout and instead return errors defined by the context package. Will
+// be removed in 1.28.
 func PollImmediateWithContext(ctx context.Context, interval, timeout time.Duration, condition ConditionWithContextFunc) error {
 	return poll(ctx, true, poller(interval, timeout), condition)
 }
@@ -497,6 +709,11 @@ func PollImmediateWithContext(ctx context.Context, interval, timeout time.Durati
 //
 // PollImmediateUntil runs the 'condition' before waiting for the interval.
 // 'condition' will always be invoked at least once.
+//
+// Deprecated: This method does not return errors from context, use
+// PollImmediateWithContextCancel without a deadline. Note that the new method will no longer
+// return ErrWaitTimeout and instead return errors defined by the context package. Will
+// be removed in 1.28.
 func PollImmediateUntil(interval time.Duration, condition ConditionFunc, stopCh <-chan struct{}) error {
 	ctx, cancel := ContextForChannel(stopCh)
 	defer cancel()
@@ -508,6 +725,11 @@ func PollImmediateUntil(interval time.Duration, condition ConditionFunc, stopCh 
 //
 // PollImmediateUntilWithContext runs the 'condition' before waiting for the interval.
 // 'condition' will always be invoked at least once.
+//
+// Deprecated: This method does not return errors from context, use
+// PollImmediateWithContextCancel without a deadline. Note that the new method will no longer
+// return ErrWaitTimeout and instead return errors defined by the context package. Will
+// be removed in 1.28.
 func PollImmediateUntilWithContext(ctx context.Context, interval time.Duration, condition ConditionWithContextFunc) error {
 	return poll(ctx, true, poller(interval, 0), condition)
 }
@@ -518,6 +740,11 @@ func PollImmediateUntilWithContext(ctx context.Context, interval time.Duration, 
 //
 // Some intervals may be missed if the condition takes too long or the time
 // window is too short.
+//
+// Deprecated: This method does not return errors from context, use
+// PollImmediateWithContextCancel without a deadline. Note that the new method will no longer
+// return ErrWaitTimeout and instead return errors defined by the context package. Will
+// be removed in 1.28.
 func PollImmediateInfinite(interval time.Duration, condition ConditionFunc) error {
 	return PollImmediateInfiniteWithContext(context.Background(), interval, condition.WithContext())
 }
@@ -529,20 +756,24 @@ func PollImmediateInfinite(interval time.Duration, condition ConditionFunc) erro
 //
 // Some intervals may be missed if the condition takes too long or the time
 // window is too short.
+//
+// Deprecated: This method does not return errors from context, use
+// PollImmediateWithContextCancel without a deadline. Note that the new method will no longer
+// return ErrWaitTimeout and instead return errors defined by the context package. Will
+// be removed in 1.28.
 func PollImmediateInfiniteWithContext(ctx context.Context, interval time.Duration, condition ConditionWithContextFunc) error {
 	return poll(ctx, true, poller(interval, 0), condition)
 }
 
-// Internally used, each of the public 'Poll*' function defined in this
-// package should invoke this internal function with appropriate parameters.
-// ctx: the context specified by the caller, for infinite polling pass
-// a context that never gets cancelled or expired.
-// immediate: if true, the 'condition' will be invoked before waiting for the interval,
-// in this case 'condition' will always be invoked at least once.
-// wait: user specified WaitFunc function that controls at what interval the condition
-// function should be invoked periodically and whether it is bound by a timeout.
-// condition: user specified ConditionWithContextFunc function.
-func poll(ctx context.Context, immediate bool, wait WaitWithContextFunc, condition ConditionWithContextFunc) error {
+// poll invokes condition until it is satisfied, the context is cancelled, or an
+// error occurs. It returns ErrWaitWithTimeout on ANY loop error (including context
+// cancellation) unless returnContextErr is true. If immediate is true, the condition
+// will be invoked before beginning the wait loop, otherwise there is no guarantee that
+// condition will be invoked before returning. The wait function will be invoked between
+// each execution of condition.
+//
+// Deprecated: Will be removed in 1.28.
+func poll(ctx context.Context, immediate bool, wait waitWithContextFunc, condition ConditionWithContextFunc) error {
 	if immediate {
 		done, err := runConditionWithCrashProtectionWithContext(ctx, condition)
 		if err != nil {
@@ -555,69 +786,40 @@ func poll(ctx context.Context, immediate bool, wait WaitWithContextFunc, conditi
 
 	select {
 	case <-ctx.Done():
-		// returning ctx.Err() will break backward compatibility
+		// returning ctx.Err() will break backward compatibility, use new Poll*ContextCancel
+		// methods instead
 		return ErrWaitTimeout
 	default:
-		return WaitForWithContext(ctx, wait, condition)
+		return waitForWithContext(ctx, wait, condition)
 	}
 }
 
-// WaitFunc creates a channel that receives an item every time a test
+// waitFunc creates a channel that receives an item every time a test
 // should be executed and is closed when the last test should be invoked.
-type WaitFunc func(done <-chan struct{}) <-chan struct{}
+//
+// Deprecated: Will be removed in 1.28.
+type waitFunc func(done <-chan struct{}) <-chan struct{}
 
 // WithContext converts the WaitFunc to an equivalent WaitWithContextFunc
-func (w WaitFunc) WithContext() WaitWithContextFunc {
+func (w waitFunc) WithContext() waitWithContextFunc {
 	return func(ctx context.Context) <-chan struct{} {
 		return w(ctx.Done())
 	}
 }
 
-// WaitWithContextFunc creates a channel that receives an item every time a test
+// waitWithContextFunc creates a channel that receives an item every time a test
 // should be executed and is closed when the last test should be invoked.
 //
 // When the specified context gets cancelled or expires the function
 // stops sending item and returns immediately.
-type WaitWithContextFunc func(ctx context.Context) <-chan struct{}
+//
+// Deprecated: Will be removed in 1.28.
+type waitWithContextFunc func(ctx context.Context) <-chan struct{}
 
-// WaitFor continually checks 'fn' as driven by 'wait'.
+// waitForWithContext invokes fn after the channel returned by each wait is closed.
 //
-// WaitFor gets a channel from 'wait()”, and then invokes 'fn' once for every value
-// placed on the channel and once more when the channel is closed. If the channel is closed
-// and 'fn' returns false without error, WaitFor returns ErrWaitTimeout.
-//
-// If 'fn' returns an error the loop ends and that error is returned. If
-// 'fn' returns true the loop ends and nil is returned.
-//
-// ErrWaitTimeout will be returned if the 'done' channel is closed without fn ever
-// returning true.
-//
-// When the done channel is closed, because the golang `select` statement is
-// "uniform pseudo-random", the `fn` might still run one or multiple time,
-// though eventually `WaitFor` will return.
-func WaitFor(wait WaitFunc, fn ConditionFunc, done <-chan struct{}) error {
-	ctx, cancel := ContextForChannel(done)
-	defer cancel()
-	return WaitForWithContext(ctx, wait.WithContext(), fn.WithContext())
-}
-
-// WaitForWithContext continually checks 'fn' as driven by 'wait'.
-//
-// WaitForWithContext gets a channel from 'wait()”, and then invokes 'fn'
-// once for every value placed on the channel and once more when the
-// channel is closed. If the channel is closed and 'fn'
-// returns false without error, WaitForWithContext returns ErrWaitTimeout.
-//
-// If 'fn' returns an error the loop ends and that error is returned. If
-// 'fn' returns true the loop ends and nil is returned.
-//
-// context.Canceled will be returned if the ctx.Done() channel is closed
-// without fn ever returning true.
-//
-// When the ctx.Done() channel is closed, because the golang `select` statement is
-// "uniform pseudo-random", the `fn` might still run one or multiple times,
-// though eventually `WaitForWithContext` will return.
-func WaitForWithContext(ctx context.Context, wait WaitWithContextFunc, fn ConditionWithContextFunc) error {
+// Deprecated: Will be removed in 1.28.
+func waitForWithContext(ctx context.Context, wait waitWithContextFunc, fn ConditionWithContextFunc) error {
 	waitCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	c := wait(waitCtx)
@@ -635,7 +837,8 @@ func WaitForWithContext(ctx context.Context, wait WaitWithContextFunc, fn Condit
 				return ErrWaitTimeout
 			}
 		case <-ctx.Done():
-			// returning ctx.Err() will break backward compatibility
+			// returning ctx.Err() will break backward compatibility, use new Poll*ContextCancel
+			// methods instead
 			return ErrWaitTimeout
 		}
 	}
@@ -651,14 +854,16 @@ func WaitForWithContext(ctx context.Context, wait WaitWithContextFunc, fn Condit
 //
 // Output ticks are not buffered. If the channel is not ready to receive an
 // item, the tick is skipped.
-func poller(interval, timeout time.Duration) WaitWithContextFunc {
-	return WaitWithContextFunc(func(ctx context.Context) <-chan struct{} {
+//
+// Deprecated: Will be removed in 1.28.
+func poller(interval, timeout time.Duration) waitWithContextFunc {
+	return waitWithContextFunc(func(ctx context.Context) <-chan struct{} {
 		ch := make(chan struct{})
 
 		go func() {
 			defer close(ch)
 
-			tick := time.NewTicker(interval)
+			tick := timeNewTicker(interval)
 			defer tick.Stop()
 
 			var after <-chan time.Time
@@ -666,7 +871,7 @@ func poller(interval, timeout time.Duration) WaitWithContextFunc {
 				// time.After is more convenient, but it
 				// potentially leaves timers around much longer
 				// than necessary if we exit early.
-				timer := time.NewTimer(timeout)
+				timer := timeNewTimer(timeout)
 				after = timer.C
 				defer timer.Stop()
 			}
@@ -690,33 +895,4 @@ func poller(interval, timeout time.Duration) WaitWithContextFunc {
 
 		return ch
 	})
-}
-
-// ExponentialBackoffWithContext works with a request context and a Backoff. It ensures that the retry wait never
-// exceeds the deadline specified by the request context.
-func ExponentialBackoffWithContext(ctx context.Context, backoff Backoff, condition ConditionFunc) error {
-	for backoff.Steps > 0 {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		if ok, err := runConditionWithCrashProtection(condition); err != nil || ok {
-			return err
-		}
-
-		if backoff.Steps == 1 {
-			break
-		}
-
-		waitBeforeRetry := backoff.Step()
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(waitBeforeRetry):
-		}
-	}
-
-	return ErrWaitTimeout
 }
