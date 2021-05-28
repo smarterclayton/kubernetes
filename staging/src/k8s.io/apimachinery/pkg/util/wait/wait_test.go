@@ -355,7 +355,7 @@ func (fp *fakePoller) GetwaitFunc() waitFunc {
 
 func TestPoll(t *testing.T) {
 	invocations := 0
-	f := ConditionFunc(func() (bool, error) {
+	f := ConditionWithContextFunc(func(ctx context.Context) (bool, error) {
 		invocations++
 		return true, nil
 	})
@@ -363,7 +363,7 @@ func TestPoll(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if err := poll(ctx, false, fp.GetwaitFunc().WithContext(), f.WithContext()); err != nil {
+	if err := poll(ctx, false, fp.GetwaitFunc().WithContext(), f); err != nil {
 		t.Fatalf("unexpected error %v", err)
 	}
 	fp.wg.Wait()
@@ -610,9 +610,9 @@ func Test_waitFor(t *testing.T) {
 	}
 }
 
-// TestWaitForWithEarlyClosingwaitFunc tests WaitFor when the waitFunc closes its channel. The WaitFor should
+// Test_waitForWithEarlyClosing_waitFunc tests WaitFor when the waitFunc closes its channel. The WaitFor should
 // always return ErrWaitTimeout.
-func TestWaitForWithEarlyClosingwaitFunc(t *testing.T) {
+func Test_waitForWithEarlyClosing_waitFunc(t *testing.T) {
 	stopCh := make(chan struct{})
 	defer close(stopCh)
 
@@ -703,14 +703,14 @@ func TestPollUntil(t *testing.T) {
 	close(stopCh)
 
 	go func() {
-		// release the condition func  if needed
-		for {
-			<-called
+		// release the condition func if needed
+		for range called {
 		}
 	}()
 
 	// make sure we finished the poll
 	<-pollDone
+	close(called)
 }
 
 func TestBackoff_Step(t *testing.T) {
@@ -969,6 +969,20 @@ func TestExponentialBackoffWithContext(t *testing.T) {
 			errExpected:      context.DeadlineExceeded,
 		},
 		{
+			name:             "no attempts expected with zero backoff steps",
+			steps:            0,
+			callback:         defaultCallback,
+			attemptsExpected: 0,
+			errExpected:      ErrWaitTimeout,
+		},
+		{
+			name:             "condition returns false with single backoff step",
+			steps:            1,
+			callback:         defaultCallback,
+			attemptsExpected: 1,
+			errExpected:      ErrWaitTimeout,
+		},
+		{
 			name:  "condition returns true with single backoff step",
 			steps: 1,
 			callback: func(_ int) (bool, error) {
@@ -998,12 +1012,37 @@ func TestExponentialBackoffWithContext(t *testing.T) {
 			attemptsExpected: 3,
 			errExpected:      nil,
 		},
+		{
+			name:  "condition returns error no further attempts expected",
+			steps: 5,
+			callback: func(_ int) (bool, error) {
+				return true, conditionErr
+			},
+			attemptsExpected: 1,
+			errExpected:      conditionErr,
+		},
+		{
+			name:             "context already canceled no attempts expected",
+			steps:            5,
+			context:          cancelledContext,
+			callback:         defaultCallback,
+			attemptsExpected: 0,
+			errExpected:      context.Canceled,
+		},
+		{
+			name:             "context at deadline no attempts expected",
+			steps:            5,
+			context:          deadlinedContext,
+			callback:         defaultCallback,
+			attemptsExpected: 0,
+			errExpected:      context.DeadlineExceeded,
+		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			backoff := Backoff{
-				Duration: 1 * time.Millisecond,
+				Duration: 1 * time.Microsecond,
 				Factor:   1.0,
 				Steps:    test.steps,
 			}
@@ -1023,7 +1062,6 @@ func TestExponentialBackoffWithContext(t *testing.T) {
 				attempts++
 				defer func() {
 					if test.cancelContextAfter > 0 && test.cancelContextAfter == attempts {
-						t.Logf("cancelling")
 						cancel()
 					}
 				}()
@@ -1197,7 +1235,7 @@ func Test_loopConditionUntilContext_timings(t *testing.T) {
 	}{
 		{
 			name:    "condition success",
-			delayFn: Backoff{Duration: time.Second, Steps: 2, Factor: 2.0, Jitter: 0}.delayFunc(),
+			delayFn: Backoff{Duration: time.Second, Steps: 2, Factor: 2.0, Jitter: 0}.DelayFunc(),
 			callback: func(attempts int, _ time.Duration) (bool, error) {
 				return true, nil
 			},
@@ -1214,7 +1252,7 @@ func Test_loopConditionUntilContext_timings(t *testing.T) {
 		{
 			name:      "condition success",
 			immediate: true,
-			delayFn:   Backoff{Duration: time.Second, Steps: 2, Factor: 2.0, Jitter: 0}.delayFunc(),
+			delayFn:   Backoff{Duration: time.Second, Steps: 2, Factor: 2.0, Jitter: 0}.DelayFunc(),
 			callback: func(attempts int, _ time.Duration) (bool, error) {
 				return true, nil
 			},
@@ -1231,7 +1269,7 @@ func Test_loopConditionUntilContext_timings(t *testing.T) {
 		{
 			name:    "condition success",
 			sliding: true,
-			delayFn: Backoff{Duration: time.Second, Steps: 2, Factor: 2.0, Jitter: 0}.delayFunc(),
+			delayFn: Backoff{Duration: time.Second, Steps: 2, Factor: 2.0, Jitter: 0}.DelayFunc(),
 			callback: func(attempts int, _ time.Duration) (bool, error) {
 				return true, nil
 			},
@@ -1270,7 +1308,7 @@ func Test_loopConditionUntilContext_timings(t *testing.T) {
 
 			delayFn := test.delayFn
 			if delayFn == nil {
-				delayFn = Backoff{Duration: time.Microsecond}.delayFunc()
+				delayFn = Backoff{Duration: time.Microsecond}.DelayFunc()
 			}
 			var delays []time.Duration
 			wrappedDelayFn := func() time.Duration {
@@ -1414,7 +1452,6 @@ func TestPollImmediateUntilWithContext(t *testing.T) {
 					return false, fakeErr
 				}
 			},
-			context:          defaultContext,
 			errExpected:      fakeErr,
 			attemptsExpected: 1,
 		},
@@ -1425,7 +1462,6 @@ func TestPollImmediateUntilWithContext(t *testing.T) {
 					return true, nil
 				}
 			},
-			context:          defaultContext,
 			errExpected:      nil,
 			attemptsExpected: 1,
 		},
@@ -1437,7 +1473,7 @@ func TestPollImmediateUntilWithContext(t *testing.T) {
 				}
 			},
 			context:          cancelledContext,
-			errExpected:      ErrWaitTimeout, // this should be context.Canceled, but this method cannot change
+			errExpected:      ErrWaitTimeout, // this should be context.Canceled but that would break callers that assume all errors are ErrWaitTimeout
 			attemptsExpected: 1,
 		},
 		{
@@ -1451,7 +1487,6 @@ func TestPollImmediateUntilWithContext(t *testing.T) {
 					return true, nil
 				}
 			},
-			context:          defaultContext,
 			errExpected:      nil,
 			attemptsExpected: 4,
 		},
@@ -1462,9 +1497,8 @@ func TestPollImmediateUntilWithContext(t *testing.T) {
 					return false, nil
 				}
 			},
-			context:                      defaultContext,
 			cancelContextAfterNthAttempt: 4,
-			errExpected:                  ErrWaitTimeout,
+			errExpected:                  ErrWaitTimeout, // this should be context.Canceled, but this method cannot change
 			attemptsExpected:             4,
 		},
 	}
@@ -1591,7 +1625,7 @@ func Test_waitForWithContext(t *testing.T) {
 	}
 }
 
-func TestPollInternal(t *testing.T) {
+func Test_poll(t *testing.T) {
 	fakeErr := errors.New("fake error")
 	tests := []struct {
 		name               string
@@ -1745,6 +1779,27 @@ func TestPollInternal(t *testing.T) {
 			attemptsExpected:   2,
 			errExpected:        ErrWaitTimeout,
 		},
+		{
+			name:      "context is cancelled after N attempts, context error not expected (legacy behavior)",
+			immediate: false,
+			condition: ConditionWithContextFunc(func(context.Context) (bool, error) {
+				return false, nil
+			}),
+			waitFunc: func() waitFunc {
+				return func(done <-chan struct{}) <-chan struct{} {
+					ch := make(chan struct{})
+					// just tick twice
+					go func() {
+						ch <- struct{}{}
+						ch <- struct{}{}
+					}()
+					return ch
+				}
+			},
+			cancelContextAfter: 2,
+			attemptsExpected:   2,
+			errExpected:        ErrWaitTimeout,
+		},
 	}
 
 	for _, test := range tests {
@@ -1828,5 +1883,125 @@ func Benchmark_loopConditionUntilContext_ShortDuration(b *testing.B) {
 		}); err != nil {
 			b.Fatalf("unexpected err: %v", err)
 		}
+	}
+}
+
+type errWrapper struct {
+	wrapped error
+}
+
+func (w errWrapper) Unwrap() error {
+	return w.wrapped
+}
+func (w errWrapper) Error() string {
+	return fmt.Sprintf("wrapped: %v", w.wrapped)
+}
+
+type errNotWrapper struct {
+	wrapped error
+}
+
+func (w errNotWrapper) Error() string {
+	return fmt.Sprintf("wrapped: %v", w.wrapped)
+}
+
+func TestEndedEarly(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			err:  ErrWaitTimeout,
+			want: true,
+		},
+		{
+			err:  context.Canceled,
+			want: true,
+		}, {
+			err:  context.DeadlineExceeded,
+			want: true,
+		},
+		{
+			err:  errWrapper{ErrWaitTimeout},
+			want: true,
+		},
+		{
+			err:  errWrapper{context.Canceled},
+			want: true,
+		},
+		{
+			err:  errWrapper{context.DeadlineExceeded},
+			want: true,
+		},
+		{
+			err:  ErrorEndedEarly(nil),
+			want: true,
+		},
+		{
+			err:  ErrorEndedEarly(errors.New("unknown")),
+			want: true,
+		},
+		{
+			err:  ErrorEndedEarly(context.Canceled),
+			want: true,
+		},
+		{
+			err:  ErrorEndedEarly(ErrWaitTimeout),
+			want: true,
+		},
+
+		{
+			err: nil,
+		},
+		{
+			err: errors.New("not a cancellation"),
+		},
+		{
+			err: errNotWrapper{ErrWaitTimeout},
+		},
+		{
+			err: errNotWrapper{context.Canceled},
+		},
+		{
+			err: errNotWrapper{context.DeadlineExceeded},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := EndedEarly(tt.err); got != tt.want {
+				t.Errorf("EndedEarly() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestErrorEndedEarly(t *testing.T) {
+	internalErr := errEndedEarly{}
+	if ErrorEndedEarly(internalErr) != internalErr {
+		t.Fatalf("error should not be wrapped twice")
+	}
+
+	internalErr = errEndedEarly{errEndedEarly{}}
+	if ErrorEndedEarly(internalErr) != internalErr {
+		t.Fatalf("object should be identical")
+	}
+
+	in := errors.New("test")
+	actual, expected := ErrorEndedEarly(in), (errEndedEarly{in})
+	if actual != expected {
+		t.Fatalf("did not wrap error")
+	}
+	if !errors.Is(actual, errErrWaitTimeout) {
+		t.Fatalf("does not obey errors.Is contract")
+	}
+	if actual.Error() != in.Error() {
+		t.Fatalf("unexpected error output")
+	}
+	if !EndedEarly(actual) {
+		t.Fatalf("is not EndedEarly")
+	}
+	if EndedEarly(in) {
+		t.Fatalf("should not be EndedEarly")
 	}
 }
