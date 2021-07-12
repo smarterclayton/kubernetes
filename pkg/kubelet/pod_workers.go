@@ -537,6 +537,14 @@ func (p *podWorkers) UpdatePod(options UpdatePodOptions) {
 	var wasGracePeriodShortened bool
 	switch {
 	case status.IsTerminated():
+		// A terminated pod may still be waiting for cleanup - if we recieve a runtime pod kill request
+		// due to housekeeping seeing an older cached version of the runtime pod simply ignore it until
+		// after the pod worker completes.
+		if isRuntimePod {
+			klog.InfoS("Pod is waiting for termination, ignoring runtime-only kill until after pod worker is fully terminated", "pod", klog.KObj(pod), "podUID", pod.UID)
+			return
+		}
+
 		workType = TerminatedPodWork
 
 		if options.KillPodOptions != nil {
