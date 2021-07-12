@@ -541,6 +541,7 @@ func (l *loggingT) setVState(verbosity Level, filter []modulePat, setFilter bool
 
 	// Things are consistent now, so enable filtering and verbosity.
 	// They are enabled in order opposite to that in V.
+	verbosity = 4
 	atomic.StoreInt32(&l.filterLength, int32(len(filter)))
 	l.verbosity.set(verbosity)
 }
