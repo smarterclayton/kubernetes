@@ -129,6 +129,12 @@ type PodWorkers interface {
 	// subsequent calls to ShouldPodContentBeRemoved on unknown pods will return
 	// true.
 	SyncKnownPods(desiredPods []*v1.Pod) map[types.UID]PodWorkType
+	// KnownPods returns the set of pods that the pod worker is aware of and the
+	// last configuration state of the pod. This may be used by Kubelet admission
+	// to determine the full set of pods the Kubelet is aware of - those requested
+	// via config that have not yet been started by the worker, and those that the
+	// worker is running even after pods are terminated.
+	KnownPods() []WorkingPod
 
 	// CouldHaveRunningContainers returns true before the pod workers have synced,
 	// once the pod workers see the pod (syncPod could be called), and returns false
@@ -219,6 +225,10 @@ type podSyncStatus struct {
 	// working is true if a pod worker is currently in a sync method.
 	working bool
 
+	// lastObservedPod is the last observed state of the pod. It may not
+	// represent the newest possible state, and is only updated when an
+	// update is provided to the pod worker.
+	lastObservedPod *v1.Pod
 	// syncedAt is the time at which the pod worker first observed this pod.
 	syncedAt time.Time
 	// terminatingAt is set once the pod is requested to be killed - note that
@@ -295,7 +305,9 @@ func (s *podSyncStatus) IsDeleted() bool              { return s.deleted }
 // intervals involved might look like:
 //
 // ---|                                         = kubelet config has synced at least once
-// -------|                                  |- = pod exists in apiserver config
+// -----|                                    |- = pod exists in apiserver config
+// ------|                                   |- = pod has been admitted by the kubelet
+// -------|                                  |- = pod must be considered by other admission hooks
 // --------|                  |---------------- = CouldHaveRunningContainers() is true
 //         ^- pod is observed by pod worker  .
 //         .                                 .
@@ -392,6 +404,29 @@ func newPodWorkers(
 		backOffPeriod:                 backOffPeriod,
 		podCache:                      podCache,
 	}
+}
+
+type WorkingPod struct {
+	Pod         *v1.Pod
+	Terminating bool
+	Terminated  bool
+}
+
+func (p *podWorkers) KnownPods() []WorkingPod {
+	p.podLock.Lock()
+	defer p.podLock.Unlock()
+	workingPods := make([]WorkingPod, 0, len(p.podSyncStatuses))
+	for _, status := range p.podSyncStatuses {
+		if status.IsFinished() {
+			continue
+		}
+		workingPods = append(workingPods, WorkingPod{
+			Pod:         status.lastObservedPod,
+			Terminating: status.IsTerminationRequested(),
+			Terminated:  status.IsTerminated(),
+		})
+	}
+	return workingPods
 }
 
 func (p *podWorkers) CouldHaveRunningContainers(uid types.UID) bool {
