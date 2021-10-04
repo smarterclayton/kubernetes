@@ -25,6 +25,7 @@ import (
 	"reflect"
 	"testing"
 
+	goccyjson "github.com/goccy/go-json"
 	"github.com/google/go-cmp/cmp"
 	jsoniter "github.com/json-iterator/go"
 
@@ -431,6 +432,19 @@ func benchmarkItems(b *testing.B) []v1.Pod {
 	return items
 }
 
+func benchmarkItemsUnstructured(b *testing.B) []map[string]interface{} {
+	items := benchmarkItems(b)
+	unstructuredItems := make([]map[string]interface{}, 0, len(items))
+	for _, item := range items {
+		out, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&item)
+		if err != nil {
+			b.Fatal(err)
+		}
+		unstructuredItems = append(unstructuredItems, out)
+	}
+	return unstructuredItems
+}
+
 func benchmarkItemsList(b *testing.B, numItems int) v1.PodList {
 	apiObjectFuzzer := fuzzer.FuzzerFor(FuzzerFuncs, rand.NewSource(benchmarkSeed), legacyscheme.Codecs)
 	items := make([]v1.Pod, numItems)
@@ -491,6 +505,55 @@ func BenchmarkEncodeJSONMarshal(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if _, err := gojson.Marshal(&items[i%width]); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+}
+
+func BenchmarkEncodeGoccyJSONMarshal(b *testing.B) {
+	items := benchmarkItems(b)
+	width := len(items)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := goccyjson.Marshal(&items[i%width]); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+}
+
+func BenchmarkEncodeUnstructuredGoccyJSONMarshal(b *testing.B) {
+	items := benchmarkItemsUnstructured(b)
+	width := len(items)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := goccyjson.Marshal(&items[i%width]); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+}
+
+func BenchmarkEncodeJSONIterMarshal(b *testing.B) {
+	items := benchmarkItems(b)
+	width := len(items)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := jsoniter.ConfigFastest.Marshal(&items[i%width]); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+}
+
+func BenchmarkEncodeUnstructuredJSONIterMarshal(b *testing.B) {
+	items := benchmarkItemsUnstructured(b)
+	width := len(items)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := jsoniter.ConfigFastest.Marshal(&items[i%width]); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -583,6 +646,100 @@ func BenchmarkDecodeIntoJSON(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		obj := v1.Pod{}
 		if err := gojson.Unmarshal(encoded[i%width], &obj); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+}
+
+func BenchmarkDecodeIntoUnstructuredJSON(b *testing.B) {
+	codec := legacyscheme.Codecs.LegacyCodec(v1.SchemeGroupVersion)
+	items := benchmarkItems(b)
+	width := len(items)
+	encoded := make([][]byte, width)
+	for i := range items {
+		data, err := runtime.Encode(codec, &items[i])
+		if err != nil {
+			b.Fatal(err)
+		}
+		encoded[i] = data
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		obj := map[string]interface{}{}
+		if err := gojson.Unmarshal(encoded[i%width], &obj); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+}
+
+func BenchmarkDecodeIntoUnstructuredGoccyJSON(b *testing.B) {
+	codec := legacyscheme.Codecs.LegacyCodec(v1.SchemeGroupVersion)
+	items := benchmarkItems(b)
+	width := len(items)
+	encoded := make([][]byte, width)
+	for i := range items {
+		data, err := runtime.Encode(codec, &items[i])
+		if err != nil {
+			b.Fatal(err)
+		}
+		encoded[i] = data
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		obj := map[string]interface{}{}
+		if err := goccyjson.Unmarshal(encoded[i%width], &obj); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+}
+
+func BenchmarkDecodeIntoGoccyJSON(b *testing.B) {
+	codec := legacyscheme.Codecs.LegacyCodec(v1.SchemeGroupVersion)
+	items := benchmarkItems(b)
+	width := len(items)
+	encoded := make([][]byte, width)
+	for i := range items {
+		data, err := runtime.Encode(codec, &items[i])
+		if err != nil {
+			b.Fatal(err)
+		}
+		encoded[i] = data
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		obj := v1.Pod{}
+		if err := goccyjson.Unmarshal(encoded[i%width], &obj); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+}
+
+// BenchmarkDecodeIntoJSONCodecGenConfigFast provides a baseline
+// for JSON decode performance with jsoniter.ConfigFast
+func BenchmarkDecodeIntoUnstructuredJSONCodecGenConfigFast(b *testing.B) {
+	kcodec := legacyscheme.Codecs.LegacyCodec(v1.SchemeGroupVersion)
+	items := benchmarkItems(b)
+	width := len(items)
+	encoded := make([][]byte, width)
+	for i := range items {
+		data, err := runtime.Encode(kcodec, &items[i])
+		if err != nil {
+			b.Fatal(err)
+		}
+		encoded[i] = data
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		obj := map[string]interface{}{}
+		if err := jsoniter.ConfigFastest.Unmarshal(encoded[i%width], &obj); err != nil {
 			b.Fatal(err)
 		}
 	}

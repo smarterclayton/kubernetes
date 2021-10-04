@@ -40,6 +40,7 @@ require (
 	github.com/evanphx/json-patch v4.11.0+incompatible
 	github.com/fsnotify/fsnotify v1.4.9
 	github.com/go-ozzo/ozzo-validation v3.5.0+incompatible // indirect
+	github.com/goccy/go-json v0.7.8
 	github.com/godbus/dbus/v5 v5.0.4
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da

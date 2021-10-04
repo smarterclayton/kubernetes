@@ -309,6 +309,17 @@ github.com/go-openapi/swag
 ## explicit
 github.com/go-ozzo/ozzo-validation
 github.com/go-ozzo/ozzo-validation/is
+# github.com/goccy/go-json v0.7.8
+## explicit
+github.com/goccy/go-json
+github.com/goccy/go-json/internal/decoder
+github.com/goccy/go-json/internal/encoder
+github.com/goccy/go-json/internal/encoder/vm
+github.com/goccy/go-json/internal/encoder/vm_color
+github.com/goccy/go-json/internal/encoder/vm_color_indent
+github.com/goccy/go-json/internal/encoder/vm_indent
+github.com/goccy/go-json/internal/errors
+github.com/goccy/go-json/internal/runtime
 # github.com/godbus/dbus/v5 v5.0.4 => github.com/godbus/dbus/v5 v5.0.4
 ## explicit
 github.com/godbus/dbus/v5
