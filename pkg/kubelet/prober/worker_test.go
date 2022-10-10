@@ -522,3 +522,43 @@ func TestGetPodLabelName(t *testing.T) {
 		}
 	}
 }
+
+func Test_newWorker_DefaultPeriodNonZero(t *testing.T) {
+	testCases := []struct {
+		name           string
+		probeSpec      v1.Probe
+		expectedPeriod int32
+	}{
+		{
+			name:           "period 0s",
+			probeSpec:      v1.Probe{PeriodSeconds: 0},
+			expectedPeriod: 1,
+		},
+		{
+			name:           "period 1s",
+			probeSpec:      v1.Probe{PeriodSeconds: 1},
+			expectedPeriod: 1,
+		},
+		{
+			name:           "period 10s",
+			probeSpec:      v1.Probe{PeriodSeconds: 10},
+			expectedPeriod: 10,
+		},
+	}
+	for _, test := range testCases {
+		t.Run(test.name, func(t *testing.T) {
+			for _, v := range []probeType{liveness, readiness, startup} {
+				probeType := v
+				t.Run(fmt.Sprintf("probe_%d", probeType), func(t *testing.T) {
+					m := newTestManager()
+					pod := getTestPod()
+					setTestProbe(pod, probeType, test.probeSpec)
+					ret := newWorker(m, probeType, pod, pod.Spec.Containers[0])
+					if ret.spec.PeriodSeconds != test.expectedPeriod {
+						t.Errorf("unexpected worker period %d", ret.spec.PeriodSeconds)
+					}
+				})
+			}
+		})
+	}
+}

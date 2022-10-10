@@ -114,6 +114,13 @@ func newWorker(
 		w.initialValue = results.Unknown
 	}
 
+	// be defensive against hot-loops in the prober
+	if w.spec.PeriodSeconds == 0 {
+		klog.V(2).InfoS("Pod probe has a zero period, defaulting to 1s to avoid loops",
+			"probeType", w.probeType, "pod", klog.KObj(w.pod), "containerName", w.container.Name)
+		w.spec.PeriodSeconds = 1
+	}
+
 	podName := getPodLabelName(w.pod)
 
 	basicMetricLabels := metrics.Labels{
