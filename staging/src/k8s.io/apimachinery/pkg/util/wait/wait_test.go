@@ -379,50 +379,6 @@ func TestPollError(t *testing.T) {
 	}
 }
 
-func withCustomNewTicker(newFn func(time.Duration) *time.Ticker, fn func()) {
-	timeNewTicker = newFn
-	defer func() {
-		timeNewTicker = time.NewTicker
-	}()
-	fn()
-}
-
-func TestpollUntilContextCancelError(t *testing.T) {
-	expectedError := errors.New("Expected error")
-	f := ConditionFunc(func() (bool, error) {
-		return false, expectedError
-	})
-	fakeTicker := time.NewTicker(time.Millisecond)
-	for len(fakeTicker.C) == 0 {
-		time.Sleep(time.Millisecond)
-	}
-	var gotTimer bool
-	withCustomNewTicker(
-		func(d time.Duration) *time.Ticker {
-			gotTimer = true
-			if d != time.Millisecond {
-				t.Fatalf("unexpected duration: %v", d)
-			}
-			return fakeTicker
-		},
-		func() {
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			if err := pollUntilContextCancel(ctx, false, time.Millisecond, f.WithContext()); err == nil || err != expectedError {
-				t.Fatalf("unexpected error: %v", err)
-			}
-		},
-	)
-	if !gotTimer {
-		t.Fatalf("expected timer to be set")
-	}
-	select {
-	case _, ok := <-fakeTicker.C:
-		t.Fatalf("timer channel should still be open=%t but timer should be stopped and consume the tick", ok)
-	case <-time.After(2 * time.Millisecond):
-	}
-}
-
 func TestPollImmediate(t *testing.T) {
 	invocations := 0
 	f := ConditionFunc(func() (bool, error) {
@@ -736,6 +692,15 @@ func TestExponentialBackoffWithContext(t *testing.T) {
 		return context.Background(), nil
 	}
 
+	cancelledContext := func() (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		return ctx, cancel
+	}
+
+	newDeadlineContext := func() (context.Context, context.CancelFunc) {
+		return context.WithTimeout(context.Background(), time.Millisecond)
+	}
 	defaultCallback := func(_ int) (bool, error) {
 		return false, nil
 	}
@@ -826,7 +791,9 @@ func TestExponentialBackoffWithContext(t *testing.T) {
 			steps: 5,
 			ctxGetter: func() (context.Context, context.CancelFunc) {
 				ctx, cancel := newDeadlineContext()
-				cancel()
+				for range ctx.Done() {
+					time.Sleep(time.Millisecond + 1)
+				}
 				return ctx, cancel
 			},
 			callback:         defaultCallback,
@@ -916,28 +883,12 @@ func TestExponentialBackoffWithContext(t *testing.T) {
 			errExpected:      conditionErr,
 		},
 		{
-			name:  "context already canceled no attempts expected",
-			steps: 5,
-			ctxGetter: func() (context.Context, context.CancelFunc) {
-				ctx, cancel := context.WithCancel(context.Background())
-				cancel()
-				return ctx, cancel
-			},
+			name:             "context already canceled no attempts expected",
+			steps:            5,
+			ctxGetter:        cancelledContext,
 			callback:         defaultCallback,
 			attemptsExpected: 0,
 			errExpected:      context.Canceled,
-		},
-		{
-			name:  "context at deadline no attempts expected",
-			steps: 5,
-			ctxGetter: func() (context.Context, context.CancelFunc) {
-				ctx, cancel := newDeadlineContext()
-				cancel()
-				return ctx, cancel
-			},
-			callback:         defaultCallback,
-			attemptsExpected: 0,
-			errExpected:      context.DeadlineExceeded,
 		},
 	}
 
@@ -1467,343 +1418,29 @@ func Test_poll(t *testing.T) {
 	}
 }
 
-type fakeContext struct {
-	ctx        context.Context
-	doneCalled int
-}
-
-func newDeadlineContext() (context.Context, context.CancelFunc) {
-	ctx, cancelFn := context.WithCancel(context.Background())
-	return &fakeContext{ctx: ctx}, cancelFn
-}
-
-func (ctx *fakeContext) Deadline() (deadline time.Time, ok bool) {
-	panic("not implemented") // TODO: Implement
-}
-
-func (ctx *fakeContext) Done() <-chan struct{} {
-	ctx.doneCalled++
-	return ctx.ctx.Done()
-}
-
-func (ctx *fakeContext) Err() error {
-	select {
-	case <-ctx.ctx.Done():
-		return context.DeadlineExceeded
-	default:
-		return nil
+func Benchmark_poll(b *testing.B) {
+	ctx := context.Background()
+	for i := 0; i < b.N; i++ {
+		attempts := 0
+		if err := poll(ctx, true, poller(time.Microsecond, 0), func(_ context.Context) (bool, error) {
+			attempts++
+			return attempts >= 100, nil
+		}); err != nil {
+			b.Fatalf("unexpected err: %v", err)
+		}
 	}
 }
 
-func (ctx *fakeContext) Value(key any) any {
-	panic("not implemented") // TODO: Implement
-}
-
-func Test_pollUntilContextCancel(t *testing.T) {
-	fakeErr := errors.New("fake error")
-	tests := []struct {
-		name                    string
-		context                 func() (context.Context, context.CancelFunc)
-		immediate               bool
-		timeNewTicker           func() *time.Ticker
-		condition               ConditionWithContextFunc
-		cancelContextAfter      int
-		attemptsExpected        int
-		attemptsExpectedAtLeast int
-		errExpected             error
-	}{
-		{
-			name:      "immediate is true, condition returns an error",
-			immediate: true,
-			context: func() (context.Context, context.CancelFunc) {
-				// use a cancelled context, we want to make sure the
-				// condition is expected to be invoked immediately.
-				ctx, cancel := context.WithCancel(context.Background())
-				cancel()
-				return ctx, cancel
-			},
-			condition: ConditionWithContextFunc(func(context.Context) (bool, error) {
-				return false, fakeErr
-			}),
-			attemptsExpected: 1,
-			errExpected:      fakeErr,
-		},
-		{
-			name:      "immediate is true, condition returns true",
-			immediate: true,
-			context: func() (context.Context, context.CancelFunc) {
-				// use a cancelled context, we want to make sure the
-				// condition is expected to be invoked immediately.
-				ctx, cancel := context.WithCancel(context.Background())
-				cancel()
-				return ctx, cancel
-			},
-			condition: ConditionWithContextFunc(func(context.Context) (bool, error) {
-				return true, nil
-			}),
-			attemptsExpected: 1,
-			errExpected:      nil,
-		},
-		{
-			name:      "immediate is true, context is cancelled, condition return false",
-			immediate: true,
-			context: func() (context.Context, context.CancelFunc) {
-				// use a cancelled context, we want to make sure the
-				// condition is expected to be invoked immediately.
-				ctx, cancel := context.WithCancel(context.Background())
-				cancel()
-				return ctx, cancel
-			},
-			condition: ConditionWithContextFunc(func(context.Context) (bool, error) {
-				return false, nil
-			}),
-			// Because select chooses channels randomly, it is possible for the
-			// pollUntilContextCancel method to repeatedly select the timer channel
-			// instead of the ctx.Done() channel and invoke condition more times than
-			// the minimum. Prevent the flake by setting a floor in the test and keeping
-			// the core method as simple as possible.
-			attemptsExpectedAtLeast: 1,
-			errExpected:             context.Canceled,
-		},
-		{
-			name:      "immediate is false, context is cancelled",
-			immediate: false,
-			context: func() (context.Context, context.CancelFunc) {
-				// use a cancelled context, we want to make sure the
-				// condition is expected to be invoked immediately.
-				ctx, cancel := context.WithCancel(context.Background())
-				cancel()
-				return ctx, cancel
-			},
-			condition: ConditionWithContextFunc(func(context.Context) (bool, error) {
-				return false, nil
-			}),
-			attemptsExpected: 0,
-			errExpected:      context.Canceled,
-		},
-		{
-			name:      "immediate is false, condition returns an error",
-			immediate: false,
-			context: func() (context.Context, context.CancelFunc) {
-				return context.WithCancel(context.Background())
-			},
-			condition: ConditionWithContextFunc(func(context.Context) (bool, error) {
-				return false, fakeErr
-			}),
-			attemptsExpected: 1,
-			errExpected:      fakeErr,
-		},
-		{
-			name:      "immediate is false, condition returns true",
-			immediate: false,
-			context: func() (context.Context, context.CancelFunc) {
-				return context.WithCancel(context.Background())
-			},
-			condition: ConditionWithContextFunc(func(context.Context) (bool, error) {
-				return true, nil
-			}),
-			attemptsExpected: 1,
-			errExpected:      nil,
-		},
-		{
-			name:      "context is cancelled after N attempts, context error expected",
-			immediate: false,
-			context: func() (context.Context, context.CancelFunc) {
-				return context.WithCancel(context.Background())
-			},
-			condition: ConditionWithContextFunc(func(context.Context) (bool, error) {
-				return false, nil
-			}),
-			cancelContextAfter:      2,
-			attemptsExpectedAtLeast: 2,
-			errExpected:             context.Canceled,
-		},
-		{
-			name:      "context is is past deadline after N attempts, context error expected",
-			immediate: true,
-			context: func() (context.Context, context.CancelFunc) {
-				return newDeadlineContext()
-			},
-			condition: ConditionWithContextFunc(func(context.Context) (bool, error) {
-				return false, nil
-			}),
-			timeNewTicker: func() *time.Ticker {
-				return time.NewTicker(time.Millisecond)
-			},
-			attemptsExpectedAtLeast: 3,
-			cancelContextAfter:      3,
-			errExpected:             context.DeadlineExceeded,
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			var attempts int
-			err := func() error {
-				ctx, cancel := test.context()
-				defer cancel()
-
-				conditionWrapper := func(ctx context.Context) (done bool, err error) {
-					attempts++
-
-					defer func() {
-						if test.cancelContextAfter == attempts {
-							cancel()
-						}
-					}()
-
-					return test.condition(ctx)
-				}
-
-				var err error
-				withCustomNewTicker(
-					func(d time.Duration) *time.Ticker {
-						if d != time.Second {
-							t.Fatalf("unexpected time duration: %v", d)
-						}
-						ticker := time.NewTicker(time.Microsecond)
-						if test.timeNewTicker != nil {
-							ticker = test.timeNewTicker()
-						}
-						return ticker
-					},
-					func() {
-						err = pollUntilContextCancel(ctx, test.immediate, time.Second, conditionWrapper)
-					},
-				)
-				return err
-			}()
-
-			if test.errExpected != err {
-				t.Errorf("Expected error: %v, but got: %v", test.errExpected, err)
-			}
-			if test.attemptsExpectedAtLeast > 0 {
-				if test.attemptsExpectedAtLeast > attempts {
-					t.Errorf("Expected at least %d invocations, got %d", test.attemptsExpectedAtLeast, attempts)
-				}
-			} else if test.attemptsExpected != attempts {
-				t.Errorf("Expected %d invocations, got %d", test.attemptsExpected, attempts)
-			}
-		})
-	}
-}
-
-type errWrapper struct {
-	wrapped error
-}
-
-func (w errWrapper) Unwrap() error {
-	return w.wrapped
-}
-func (w errWrapper) Error() string {
-	return fmt.Sprintf("wrapped: %v", w.wrapped)
-}
-
-type errNotWrapper struct {
-	wrapped error
-}
-
-func (w errNotWrapper) Error() string {
-	return fmt.Sprintf("wrapped: %v", w.wrapped)
-}
-
-func TestEndedEarly(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{
-			err:  ErrWaitTimeout,
-			want: true,
-		},
-		{
-			err:  context.Canceled,
-			want: true,
-		}, {
-			err:  context.DeadlineExceeded,
-			want: true,
-		},
-		{
-			err:  errWrapper{ErrWaitTimeout},
-			want: true,
-		},
-		{
-			err:  errWrapper{context.Canceled},
-			want: true,
-		},
-		{
-			err:  errWrapper{context.DeadlineExceeded},
-			want: true,
-		},
-		{
-			err:  ErrorEndedEarly(nil),
-			want: true,
-		},
-		{
-			err:  ErrorEndedEarly(errors.New("unknown")),
-			want: true,
-		},
-		{
-			err:  ErrorEndedEarly(context.Canceled),
-			want: true,
-		},
-		{
-			err:  ErrorEndedEarly(ErrWaitTimeout),
-			want: true,
-		},
-
-		{
-			err: nil,
-		},
-		{
-			err: errors.New("not a cancellation"),
-		},
-		{
-			err: errNotWrapper{ErrWaitTimeout},
-		},
-		{
-			err: errNotWrapper{context.Canceled},
-		},
-		{
-			err: errNotWrapper{context.DeadlineExceeded},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := EndedEarly(tt.err); got != tt.want {
-				t.Errorf("EndedEarly() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestErrorEndedEarly(t *testing.T) {
-	internalErr := errEndedEarly{}
-	if ErrorEndedEarly(internalErr) != internalErr {
-		t.Fatalf("error should not be wrapped twice")
-	}
-
-	internalErr = errEndedEarly{errEndedEarly{}}
-	if ErrorEndedEarly(internalErr) != internalErr {
-		t.Fatalf("object should be identical")
-	}
-
-	in := errors.New("test")
-	actual, expected := ErrorEndedEarly(in), (errEndedEarly{in})
-	if actual != expected {
-		t.Fatalf("did not wrap error")
-	}
-	if !errors.Is(actual, errErrWaitTimeout) {
-		t.Fatalf("does not obey errors.Is contract")
-	}
-	if actual.Error() != in.Error() {
-		t.Fatalf("unexpected error output")
-	}
-	if !EndedEarly(actual) {
-		t.Fatalf("is not EndedEarly")
-	}
-	if EndedEarly(in) {
-		t.Fatalf("should not be EndedEarly")
+func Benchmark_loopConditionUntilContext(b *testing.B) {
+	ctx := context.Background()
+	delayFn := (&Backoff{Duration: 0}).Step
+	for i := 0; i < b.N; i++ {
+		attempts := 0
+		if err := loopConditionUntilContext(ctx, RealClock.NewTimer, delayFn, true, false, func(_ context.Context) (bool, error) {
+			attempts++
+			return attempts >= 100, nil
+		}); err != nil {
+			b.Fatalf("unexpected err: %v", err)
+		}
 	}
 }

@@ -145,54 +145,16 @@ var (
 // TimerFunc allows the caller to inject a timer for testing. Most callers should use RealTimer.
 type TimerFunc func(time.Duration) clock.Timer
 
-// BackoffUntil loops until stop channel is closed, run f every duration given by BackoffManager.
-//
-// If sliding is true, the period is computed after f runs. If it is false then
-// period includes the runtime for f.
+// BackoffUntil loops until stop channel is closed, run f every duration given by delayFn.
+// An appropriately delayFn is provided by the Backoff.Step method. If sliding is true, the
+// period is computed after f runs. If it is false then period includes the runtime for f.
 func BackoffUntil(f func(), timerFn TimerFunc, delayFn DelayFunc, sliding bool, stopCh <-chan struct{}) {
-	var t clock.Timer
-	defer func() {
-		if t != nil {
-			t.Stop()
-		}
-	}()
-	for {
-		select {
-		case <-stopCh:
-			return
-		default:
-		}
-
-		var interval time.Duration
-		if !sliding {
-			interval = delayFn()
-		}
-
-		func() {
-			defer runtime.HandleCrash()
-			f()
-		}()
-
-		if sliding {
-			interval = delayFn()
-		}
-		if t == nil {
-			t = timerFn(interval)
-		} else {
-			t.Reset(interval)
-		}
-
-		// NOTE: b/c there is no priority selection in golang
-		// it is possible for this to race, meaning we could
-		// trigger t.C and stopCh, and t.C select falls through.
-		// In order to mitigate we re-check stopCh at the beginning
-		// of every loop to prevent extra executions of f().
-		select {
-		case <-stopCh:
-			return
-		case <-t.C():
-		}
-	}
+	ctx, cancel := ContextForChannel(stopCh)
+	defer cancel()
+	loopConditionUntilContext(ctx, timerFn, delayFn, true, sliding, func(_ context.Context) (bool, error) {
+		f()
+		return false, nil
+	})
 }
 
 // JitterUntilWithContext loops until context is done, running f every period.
@@ -205,7 +167,11 @@ func BackoffUntil(f func(), timerFn TimerFunc, delayFn DelayFunc, sliding bool, 
 //
 // Cancel context to stop. f may not be invoked if context is already expired.
 func JitterUntilWithContext(ctx context.Context, f func(context.Context), period time.Duration, jitterFactor float64, sliding bool) {
-	JitterUntil(func() { f(ctx) }, period, jitterFactor, sliding, ctx.Done())
+	b := Backoff{Duration: period, Jitter: jitterFactor}
+	loopConditionUntilContext(ctx, RealClock.NewTimer, b.Step, true, sliding, func(ctx context.Context) (bool, error) {
+		f(ctx)
+		return false, nil
+	})
 }
 
 // Jitter returns a time.Duration between duration and duration + maxFactor *
@@ -316,14 +282,19 @@ func (cf ConditionFunc) WithContext() ConditionWithContextFunc {
 // Note the caller must *always* call the CancelFunc, otherwise resources may be leaked.
 func ContextForChannel(parentCh <-chan struct{}) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
-
-	go func() {
-		select {
-		case <-parentCh:
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
+	select {
+	case <-parentCh:
+		// already closed, cancel now and no goroutine necessary
+		cancel()
+	default:
+		go func() {
+			select {
+			case <-parentCh:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+	}
 	return ctx, cancel
 }
 
@@ -377,9 +348,8 @@ func (b *Backoff) Step() time.Duration {
 			return Jitter(b.Duration, b.Jitter)
 		}
 		return b.Duration
-	} else {
-		b.Steps--
 	}
+	b.Steps--
 
 	duration := b.Duration
 
@@ -454,56 +424,20 @@ func (b *backoffManager) Step() time.Duration {
 // Since backoffs are often subject to cancellation, we recommend using
 // ExponentialBackoffWithContext and passing a context to the method.
 func ExponentialBackoff(backoff Backoff, condition ConditionFunc) error {
-	return ExponentialBackoffWithContext(context.Background(), backoff, condition.WithContext())
-}
-
-// ExponentialBackoffWithContext repeats a condition check with exponential backoff.
-// It immediately returns an error if the condition returns an error, the context is cancelled
-// or hits the deadline, or if the maximum attempts defined in backoff is exceeded (ErrWaitTimeout).
-// If an error is returned by the condition the backoff stops immediately. The condition will
-// never be invoked more than backoff.Steps times.
-func ExponentialBackoffWithContext(ctx context.Context, backoff Backoff, condition ConditionWithContextFunc) error {
-	// lazily initialize and reuse the timer
-	var after *time.Timer
-	defer func() {
-		if after != nil {
-			after.Stop()
+	return loopConditionUntilContext(context.Background(), RealTimer, backoff.Step, true, true, func(_ context.Context) (bool, error) {
+		if backoff.Steps < 1 {
+			return true, ErrWaitTimeout
 		}
-	}()
-
-	for backoff.Steps > 0 {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		if ok, err := runConditionWithCrashProtectionWithContext(ctx, condition); err != nil || ok {
-			return err
+		ok, err := condition()
+		if err != nil || ok {
+			return ok, err
 		}
 
 		if backoff.Steps == 1 {
-			break
+			return false, ErrWaitTimeout
 		}
-
-		waitBeforeRetry := backoff.Step()
-		if waitBeforeRetry == 0 {
-			continue
-		}
-		if after == nil {
-			after = timeNewTimer(waitBeforeRetry)
-		} else {
-			after.Reset(waitBeforeRetry)
-		}
-
-		select {
-		case <-after.C:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-
-	return ErrWaitTimeout
+		return false, nil
+	})
 }
 
 // PollUntilContextCancel tries a condition func until it returns true, an error, or the context
@@ -895,4 +829,97 @@ func poller(interval, timeout time.Duration) waitWithContextFunc {
 
 		return ch
 	})
+}
+
+// ExponentialBackoffWithContext works with a request context and a Backoff. It ensures that the retry wait never
+// exceeds the deadline specified by the request context.
+func ExponentialBackoffWithContext(ctx context.Context, backoff Backoff, condition ConditionWithContextFunc) error {
+	return loopConditionUntilContext(ctx, RealTimer, backoff.Step, true, true, func(ctx context.Context) (bool, error) {
+		if backoff.Steps < 1 {
+			return true, ErrWaitTimeout
+		}
+		ok, err := condition(ctx)
+		if err != nil || ok {
+			return ok, err
+		}
+		if backoff.Steps == 1 {
+			return false, ErrWaitTimeout
+		}
+		return false, nil
+	})
+}
+
+// loopConditionUntilContext executes the provided condition at intervals defined by
+// the provided delayFn until the provided context is cancelled, the condition returns
+// true, or the condition returns an error. If sliding is true, the period is computed
+// after condition runs. If it is false then period includes the runtime for condition.
+// If immediate is false the first delay happens before any call to condition. Use timerFn to
+// provide a test timer for verification. The returned error is the error returned by the
+// last condition or the context error if the context was terminated.
+//
+// This is the common loop construct for all polling in the wait package.
+func loopConditionUntilContext(ctx context.Context, timerFn TimerFunc, delayFn DelayFunc, immediate, sliding bool, condition ConditionWithContextFunc) error {
+	var t clock.Timer
+	defer func() {
+		if t != nil {
+			t.Stop()
+		}
+	}()
+
+	doneCh := ctx.Done()
+
+	// if we haven't requested immediate execution, delay once
+	if !immediate {
+		t = timerFn(delayFn())
+		select {
+		case <-doneCh:
+			return ctx.Err()
+		case <-t.C():
+		}
+	}
+
+	for {
+		select {
+		case <-doneCh:
+			return ctx.Err()
+		default:
+		}
+
+		var interval time.Duration
+		if !sliding {
+			interval = delayFn()
+		}
+		if ok, err := func() (bool, error) {
+			defer runtime.HandleCrash()
+			return condition(ctx)
+		}(); err != nil || ok {
+			return err
+		}
+		if sliding {
+			interval = delayFn()
+		}
+
+		// no interval requested, continue immediately
+		if interval == 0 {
+			continue
+		}
+
+		if t == nil {
+			t = timerFn(interval)
+		} else {
+			t.Reset(interval)
+		}
+
+		// NOTE: b/c there is no priority selection in golang
+		// it is possible for this to race, meaning we could
+		// trigger t.C and doneCh, and t.C select falls through.
+		// In order to mitigate we re-check doneCh at the beginning
+		// of every loop to guarantee at-most one extra execution
+		// of condition.
+		select {
+		case <-doneCh:
+			return ctx.Err()
+		case <-t.C():
+		}
+	}
 }
