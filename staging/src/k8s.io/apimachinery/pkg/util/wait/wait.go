@@ -313,6 +313,23 @@ func runConditionWithCrashProtectionWithContext(ctx context.Context, condition C
 // DelayFunc returns the next time interval to wait.
 type DelayFunc func() time.Duration
 
+// Until takes an arbitrary delay function and runs until cancelled or the condition indicates exit. This
+// offers all of the functionality of the methods in this package.
+func (fn DelayFunc) Until(ctx context.Context, immediate, sliding bool, condition ConditionWithContextFunc) error {
+	return loopConditionUntilContext(ctx, internalClock.NewTimer, fn, immediate, sliding, condition)
+}
+
+// Concurrent returns a version of this DelayFunc that is safe for use by multiple goroutines that
+// wish to share a single delay timer.
+func (fn DelayFunc) Concurrent() DelayFunc {
+	var lock sync.Mutex
+	return func() time.Duration {
+		lock.Lock()
+		defer lock.Unlock()
+		return fn()
+	}
+}
+
 // Backoff holds parameters applied to a Backoff function.
 type Backoff struct {
 	// The initial duration.
@@ -343,29 +360,58 @@ type Backoff struct {
 // original Duration and Jitter. The backoff is mutated to update its
 // Steps and Duration.
 func (b *Backoff) Step() time.Duration {
-	if b.Steps < 1 {
-		if b.Jitter > 0 {
-			return Jitter(b.Duration, b.Jitter)
-		}
-		return b.Duration
-	}
-	b.Steps--
+	var nextDuration time.Duration
+	nextDuration, b.Duration, b.Steps = delay(b.Steps, b.Duration, b.Cap, b.Factor, b.Jitter)
+	return nextDuration
+}
 
+// DelayFunc returns a function that will compute the next interval to
+// wait given the arguments in b. It does not mutate the original backoff
+// but the function is safe to use only from a single goroutine.
+func (b Backoff) DelayFunc() DelayFunc {
+	steps := b.Steps
 	duration := b.Duration
+	cap := b.Cap
+	factor := b.Factor
+	jitter := b.Jitter
 
-	// calculate the next step
-	if b.Factor != 0 {
-		b.Duration = time.Duration(float64(b.Duration) * b.Factor)
-		if b.Cap > 0 && b.Duration > b.Cap {
-			b.Duration = b.Cap
-			b.Steps = 0
+	return func() time.Duration {
+		var nextDuration time.Duration
+		// jitter is applied per step and is not cumulative over multiple steps
+		nextDuration, duration, steps = delay(steps, duration, cap, factor, jitter)
+		return nextDuration
+	}
+}
+
+// delay implements the core delay algorithm used in this package.
+func delay(steps int, duration, cap time.Duration, factor, jitter float64) (_ time.Duration, next time.Duration, nextSteps int) {
+	// when steps is non-positive, do not alter the base duration
+	if steps < 1 {
+		if jitter > 0 {
+			return Jitter(duration, jitter), duration, 0
 		}
+		return duration, duration, 0
+	}
+	steps--
+
+	// calculate the next step's interval
+	if factor != 0 {
+		next = time.Duration(float64(duration) * factor)
+		if cap > 0 && next > cap {
+			next = cap
+			steps = 0
+		}
+	} else {
+		next = duration
 	}
 
-	if b.Jitter > 0 {
-		duration = Jitter(duration, b.Jitter)
+	// add jitter for this step
+	if jitter > 0 {
+		duration = Jitter(duration, jitter)
 	}
-	return duration
+
+	return duration, next, steps
+
 }
 
 // StepWithReset returns a DelayFunc that will return the appropriate next interval to
@@ -424,18 +470,25 @@ func (b *backoffManager) Step() time.Duration {
 // Since backoffs are often subject to cancellation, we recommend using
 // ExponentialBackoffWithContext and passing a context to the method.
 func ExponentialBackoff(backoff Backoff, condition ConditionFunc) error {
-	return loopConditionUntilContext(context.Background(), RealTimer, backoff.Step, true, true, func(_ context.Context) (bool, error) {
-		if backoff.Steps < 1 {
+	return ExponentialBackoffWithContext(context.Background(), backoff, condition.WithContext())
+}
+
+// ExponentialBackoffWithContext works with a request context and a Backoff. It ensures that the retry wait never
+// exceeds the deadline specified by the request context.
+func ExponentialBackoffWithContext(ctx context.Context, backoff Backoff, condition ConditionWithContextFunc) error {
+	steps := backoff.Steps
+	return loopConditionUntilContext(ctx, RealTimer, backoff.DelayFunc(), true, true, func(ctx context.Context) (bool, error) {
+		if steps < 1 {
 			return true, ErrWaitTimeout
 		}
-		ok, err := condition()
+		ok, err := condition(ctx)
 		if err != nil || ok {
 			return ok, err
 		}
-
-		if backoff.Steps == 1 {
+		if steps == 1 {
 			return false, ErrWaitTimeout
 		}
+		steps--
 		return false, nil
 	})
 }
@@ -449,7 +502,7 @@ func ExponentialBackoff(backoff Backoff, condition ConditionFunc) error {
 // invoked before waiting and guarantees that condition is invoked at least once, regardless of
 // whether the context has been cancelled.
 func PollUntilContextCancel(ctx context.Context, interval time.Duration, immediate bool, condition ConditionWithContextFunc) error {
-	return pollUntilContextCancel(ctx, immediate, interval, condition)
+	return loopConditionUntilContext(ctx, internalClock.NewTimer, Backoff{Duration: interval}.DelayFunc(), immediate, false, condition)
 }
 
 // PollUntilContextTimeout will terminate polling after timeout duration by setting a context
@@ -464,10 +517,12 @@ func PollUntilContextCancel(ctx context.Context, interval time.Duration, immedia
 func PollUntilContextTimeout(ctx context.Context, interval, timeout time.Duration, immediate bool, condition ConditionWithContextFunc) error {
 	deadlineCtx, deadlineCancel := context.WithTimeout(ctx, timeout)
 	defer deadlineCancel()
-	return pollUntilContextCancel(deadlineCtx, immediate, interval, condition)
+	return loopConditionUntilContext(deadlineCtx, internalClock.NewTimer, Backoff{Duration: interval}.DelayFunc(), immediate, false, condition)
 }
 
 var (
+	// internalClock is used for test injection of clocks
+	internalClock = clock.RealClock{}
 	// timeNewTicker is used for test injection of tickers
 	timeNewTicker func(time.Duration) *time.Ticker = time.NewTicker
 	// timeNewTicker is used for test injection of timers
@@ -778,6 +833,15 @@ func waitForWithContext(ctx context.Context, wait waitWithContextFunc, fn Condit
 	}
 }
 
+var (
+	// internalNewTicker is used for injecting behavior into tests
+	// Deprecated: Will be removed when poller() is removed.
+	internalNewTicker func(time.Duration) *time.Ticker = time.NewTicker
+	// internalNewTimer is used for injecting behavior into tests
+	// Deprecated: Will be removed when poller() is removed.
+	internalNewTimer func(time.Duration) *time.Timer = time.NewTimer
+)
+
 // poller returns a WaitFunc that will send to the channel every interval until
 // timeout has elapsed and then closes the channel.
 //
@@ -828,24 +892,6 @@ func poller(interval, timeout time.Duration) waitWithContextFunc {
 		}()
 
 		return ch
-	})
-}
-
-// ExponentialBackoffWithContext works with a request context and a Backoff. It ensures that the retry wait never
-// exceeds the deadline specified by the request context.
-func ExponentialBackoffWithContext(ctx context.Context, backoff Backoff, condition ConditionWithContextFunc) error {
-	return loopConditionUntilContext(ctx, RealTimer, backoff.Step, true, true, func(ctx context.Context) (bool, error) {
-		if backoff.Steps < 1 {
-			return true, ErrWaitTimeout
-		}
-		ok, err := condition(ctx)
-		if err != nil || ok {
-			return ok, err
-		}
-		if backoff.Steps == 1 {
-			return false, ErrWaitTimeout
-		}
-		return false, nil
 	})
 }
 
