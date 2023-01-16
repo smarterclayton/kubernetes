@@ -21,11 +21,13 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/utils/clock"
 	testingclock "k8s.io/utils/clock/testing"
@@ -114,7 +116,12 @@ func TestNonSlidingUntilWithContext(t *testing.T) {
 func TestUntilReturnsImmediately(t *testing.T) {
 	now := time.Now()
 	ch := make(chan struct{})
+	var attempts int
 	Until(func() {
+		attempts++
+		if attempts > 1 {
+			t.Fatalf("invoked after close of channel")
+		}
 		close(ch)
 	}, 30*time.Second, ch)
 	if now.Add(25 * time.Second).Before(time.Now()) {
@@ -233,15 +240,24 @@ func TestJitterUntilNegativeFactor(t *testing.T) {
 	if now.Add(3 * time.Second).Before(time.Now()) {
 		t.Errorf("JitterUntil did not returned after predefined period with negative jitter factor when the stop chan was closed inside the func")
 	}
-
 }
 
 func TestExponentialBackoff(t *testing.T) {
+	// exits immediately
+	i := 0
+	err := ExponentialBackoff(Backoff{Factor: 1.0}, func() (bool, error) {
+		i++
+		return false, nil
+	})
+	if err != ErrWaitTimeout || i != 0 {
+		t.Errorf("unexpected error: %v", err)
+	}
+
 	opts := Backoff{Factor: 1.0, Steps: 3}
 
 	// waits up to steps
-	i := 0
-	err := ExponentialBackoff(opts, func() (bool, error) {
+	i = 0
+	err = ExponentialBackoff(opts, func() (bool, error) {
 		i++
 		return false, nil
 	})
@@ -376,6 +392,60 @@ func TestPollError(t *testing.T) {
 	used := atomic.LoadInt32(&fp.used)
 	if used != 1 {
 		t.Errorf("Expected exactly one tick, got %d", used)
+	}
+}
+
+func timerWithClock(t Timer, c clock.WithTicker) Timer {
+	switch t := t.(type) {
+	case *fixedTimer:
+		t.new = c.NewTicker
+	case *variableTimer:
+		t.new = c.NewTimer
+	default:
+		panic("unrecognized timer type, cannot inject clock")
+	}
+	return t
+}
+
+func Test_loopConditionWithContextImmediateDelay(t *testing.T) {
+	fakeClock := testingclock.NewFakeClock(time.Time{})
+	backoff := Backoff{Duration: time.Second}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	expectedError := errors.New("Expected error")
+	var attempt int
+	f := ConditionFunc(func() (bool, error) {
+		attempt++
+		return false, expectedError
+	})
+
+	doneCh := make(chan struct{})
+	go func() {
+		defer close(doneCh)
+		if err := loopConditionUntilContext(ctx, timerWithClock(backoff.Timer(), fakeClock), false, true, f.WithContext()); err == nil || err != expectedError {
+			t.Errorf("unexpected error: %v", err)
+		}
+	}()
+
+	for !fakeClock.HasWaiters() {
+		time.Sleep(time.Microsecond)
+	}
+
+	fakeClock.Step(time.Second - time.Millisecond)
+	if attempt != 0 {
+		t.Fatalf("should still be waiting for condition")
+	}
+	fakeClock.Step(2 * time.Millisecond)
+
+	select {
+	case <-doneCh:
+	case <-time.After(time.Second):
+		t.Fatalf("should have exited after a single loop")
+	}
+	if attempt != 1 {
+		t.Fatalf("expected attempt")
 	}
 }
 
@@ -597,12 +667,12 @@ func Test_waitForWithClosedChannel(t *testing.T) {
 func Test_waitForWithContextCancelsContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	waitFunc := poller(time.Millisecond, ForeverTestTimeout)
+	waitFn := poller(time.Millisecond, ForeverTestTimeout)
 
 	var ctxPassedToWait context.Context
 	waitForWithContext(ctx, func(ctx context.Context) <-chan struct{} {
 		ctxPassedToWait = ctx
-		return waitFunc(ctx)
+		return waitFn(ctx)
 	}, func(ctx context.Context) (bool, error) {
 		time.Sleep(10 * time.Millisecond)
 		return true, nil
@@ -648,6 +718,7 @@ func TestBackoff_Step(t *testing.T) {
 		initial *Backoff
 		want    []time.Duration
 	}{
+		{initial: &Backoff{Duration: time.Second, Steps: -1}, want: []time.Duration{time.Second, time.Second, time.Second}},
 		{initial: &Backoff{Duration: time.Second, Steps: 0}, want: []time.Duration{time.Second, time.Second, time.Second}},
 		{initial: &Backoff{Duration: time.Second, Steps: 1}, want: []time.Duration{time.Second, time.Second, time.Second}},
 		{initial: &Backoff{Duration: time.Second, Factor: 1.0, Steps: 1}, want: []time.Duration{time.Second, time.Second, time.Second}},
@@ -797,11 +868,23 @@ func TestBackoffDelayWithResetWithRealClockExponential(t *testing.T) {
 	}
 }
 
-func TestExponentialBackoffWithContext(t *testing.T) {
-	defaultCtx := func() context.Context {
-		return context.Background()
+func defaultContext() (context.Context, context.CancelFunc) {
+	return context.WithCancel(context.Background())
+}
+func cancelledContext() (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx, cancel
+}
+func deadlinedContext() (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	for ctx.Err() != context.DeadlineExceeded {
+		time.Sleep(501 * time.Microsecond)
 	}
+	return ctx, cancel
+}
 
+func TestExponentialBackoffWithContext(t *testing.T) {
 	defaultCallback := func(_ int) (bool, error) {
 		return false, nil
 	}
@@ -809,17 +892,18 @@ func TestExponentialBackoffWithContext(t *testing.T) {
 	conditionErr := errors.New("condition failed")
 
 	tests := []struct {
-		name             string
-		steps            int
-		ctxGetter        func() context.Context
-		callback         func(calls int) (bool, error)
-		attemptsExpected int
-		errExpected      error
+		name               string
+		steps              int
+		zeroDuration       bool
+		context            func() (context.Context, context.CancelFunc)
+		callback           func(calls int) (bool, error)
+		cancelContextAfter int
+		attemptsExpected   int
+		errExpected        error
 	}{
 		{
 			name:             "no attempts expected with zero backoff steps",
 			steps:            0,
-			ctxGetter:        defaultCtx,
 			callback:         defaultCallback,
 			attemptsExpected: 0,
 			errExpected:      ErrWaitTimeout,
@@ -827,15 +911,13 @@ func TestExponentialBackoffWithContext(t *testing.T) {
 		{
 			name:             "condition returns false with single backoff step",
 			steps:            1,
-			ctxGetter:        defaultCtx,
 			callback:         defaultCallback,
 			attemptsExpected: 1,
 			errExpected:      ErrWaitTimeout,
 		},
 		{
-			name:      "condition returns true with single backoff step",
-			steps:     1,
-			ctxGetter: defaultCtx,
+			name:  "condition returns true with single backoff step",
+			steps: 1,
 			callback: func(_ int) (bool, error) {
 				return true, nil
 			},
@@ -845,15 +927,13 @@ func TestExponentialBackoffWithContext(t *testing.T) {
 		{
 			name:             "condition always returns false with multiple backoff steps",
 			steps:            5,
-			ctxGetter:        defaultCtx,
 			callback:         defaultCallback,
 			attemptsExpected: 5,
 			errExpected:      ErrWaitTimeout,
 		},
 		{
-			name:      "condition returns true after certain attempts with multiple backoff steps",
-			steps:     5,
-			ctxGetter: defaultCtx,
+			name:  "condition returns true after certain attempts with multiple backoff steps",
+			steps: 5,
 			callback: func(attempts int) (bool, error) {
 				if attempts == 3 {
 					return true, nil
@@ -864,9 +944,8 @@ func TestExponentialBackoffWithContext(t *testing.T) {
 			errExpected:      nil,
 		},
 		{
-			name:      "condition returns error no further attempts expected",
-			steps:     5,
-			ctxGetter: defaultCtx,
+			name:  "condition returns error no further attempts expected",
+			steps: 5,
 			callback: func(_ int) (bool, error) {
 				return true, conditionErr
 			},
@@ -874,16 +953,50 @@ func TestExponentialBackoffWithContext(t *testing.T) {
 			errExpected:      conditionErr,
 		},
 		{
-			name:  "context already canceled no attempts expected",
-			steps: 5,
-			ctxGetter: func() context.Context {
-				ctx, cancel := context.WithCancel(context.Background())
-				defer cancel()
-				return ctx
-			},
+			name:             "context already canceled no attempts expected",
+			steps:            5,
+			context:          cancelledContext,
 			callback:         defaultCallback,
 			attemptsExpected: 0,
 			errExpected:      context.Canceled,
+		},
+		{
+			name:             "context at deadline no attempts expected",
+			steps:            5,
+			context:          deadlinedContext,
+			callback:         defaultCallback,
+			attemptsExpected: 0,
+			errExpected:      context.DeadlineExceeded,
+		},
+		{
+			name:  "condition returns true with single backoff step",
+			steps: 1,
+			callback: func(_ int) (bool, error) {
+				return true, nil
+			},
+			attemptsExpected: 1,
+			errExpected:      nil,
+		},
+		{
+			name:               "condition always returns false with multiple backoff steps but is cancelled at step 4",
+			steps:              5,
+			callback:           defaultCallback,
+			attemptsExpected:   4,
+			cancelContextAfter: 4,
+			errExpected:        context.Canceled,
+		},
+		{
+			name:         "condition returns true after certain attempts with multiple backoff steps and zero duration",
+			steps:        5,
+			zeroDuration: true,
+			callback: func(attempts int) (bool, error) {
+				if attempts == 3 {
+					return true, nil
+				}
+				return false, nil
+			},
+			attemptsExpected: 3,
+			errExpected:      nil,
 		},
 	}
 
@@ -894,10 +1007,26 @@ func TestExponentialBackoffWithContext(t *testing.T) {
 				Factor:   1.0,
 				Steps:    test.steps,
 			}
+			if test.zeroDuration {
+				backoff.Duration = 0
+			}
+
+			contextFn := test.context
+			if contextFn == nil {
+				contextFn = defaultContext
+			}
+			ctx, cancel := contextFn()
+			defer cancel()
 
 			attempts := 0
-			err := ExponentialBackoffWithContext(test.ctxGetter(), backoff, func(_ context.Context) (bool, error) {
+			err := ExponentialBackoffWithContext(ctx, backoff, func(_ context.Context) (bool, error) {
 				attempts++
+				defer func() {
+					if test.cancelContextAfter > 0 && test.cancelContextAfter == attempts {
+						t.Logf("cancelling")
+						cancel()
+					}
+				}()
 				return test.callback(attempts)
 			})
 
@@ -909,6 +1038,362 @@ func TestExponentialBackoffWithContext(t *testing.T) {
 				t.Errorf("expected attempts count: %d but got: %d", test.attemptsExpected, attempts)
 			}
 		})
+	}
+}
+
+func Test_loopConditionUntilContext_semantic(t *testing.T) {
+	defaultCallback := func(_ int) (bool, error) {
+		return false, nil
+	}
+
+	conditionErr := errors.New("condition failed")
+
+	tests := []struct {
+		name               string
+		immediate          bool
+		sliding            bool
+		context            func() (context.Context, context.CancelFunc)
+		callback           func(calls int) (bool, error)
+		cancelContextAfter int
+		attemptsExpected   int
+		errExpected        error
+	}{
+		{
+			name: "condition successful is only one attempt",
+			callback: func(attempts int) (bool, error) {
+				return true, nil
+			},
+			attemptsExpected: 1,
+		},
+		{
+			name: "delayed condition successful causes return and attempts",
+			callback: func(attempts int) (bool, error) {
+				return attempts > 1, nil
+			},
+			attemptsExpected: 2,
+		},
+		{
+			name: "delayed condition successful causes return and attempts many times",
+			callback: func(attempts int) (bool, error) {
+				return attempts >= 100, nil
+			},
+			attemptsExpected: 100,
+		},
+		{
+			name: "condition returns error even if ok is true",
+			callback: func(_ int) (bool, error) {
+				return true, conditionErr
+			},
+			attemptsExpected: 1,
+			errExpected:      conditionErr,
+		},
+		{
+			name: "condition exits after an error",
+			callback: func(_ int) (bool, error) {
+				return false, conditionErr
+			},
+			attemptsExpected: 1,
+			errExpected:      conditionErr,
+		},
+		{
+			name:             "context already canceled no attempts expected",
+			context:          cancelledContext,
+			callback:         defaultCallback,
+			attemptsExpected: 0,
+			errExpected:      context.Canceled,
+		},
+		{
+			name:               "context cancelled after 5 attempts",
+			context:            defaultContext,
+			callback:           defaultCallback,
+			cancelContextAfter: 5,
+			attemptsExpected:   5,
+			errExpected:        context.Canceled,
+		},
+		{
+			name:             "context at deadline no attempts expected",
+			context:          deadlinedContext,
+			callback:         defaultCallback,
+			attemptsExpected: 0,
+			errExpected:      context.DeadlineExceeded,
+		},
+	}
+
+	for _, test := range tests {
+		for _, immediate := range []bool{true, false} {
+			t.Run(fmt.Sprintf("immediate=%t", immediate), func(t *testing.T) {
+				for _, sliding := range []bool{true, false} {
+					t.Run(fmt.Sprintf("sliding=%t", sliding), func(t *testing.T) {
+						t.Run(test.name, func(t *testing.T) {
+							contextFn := test.context
+							if contextFn == nil {
+								contextFn = defaultContext
+							}
+							ctx, cancel := contextFn()
+							defer cancel()
+
+							timer := Backoff{Duration: time.Microsecond}.Timer()
+							attempts := 0
+							err := loopConditionUntilContext(ctx, timer, test.immediate, test.sliding, func(_ context.Context) (bool, error) {
+								attempts++
+								defer func() {
+									if test.cancelContextAfter > 0 && test.cancelContextAfter == attempts {
+										cancel()
+									}
+								}()
+								return test.callback(attempts)
+							})
+
+							if test.errExpected != err {
+								t.Errorf("expected error: %v but got: %v", test.errExpected, err)
+							}
+
+							if test.attemptsExpected != attempts {
+								t.Errorf("expected attempts count: %d but got: %d", test.attemptsExpected, attempts)
+							}
+						})
+					})
+				}
+			})
+		}
+	}
+}
+
+type timerWrapper struct {
+	timer   clock.Timer
+	resets  []time.Duration
+	onReset func(d time.Duration)
+}
+
+func (w *timerWrapper) C() <-chan time.Time { return w.timer.C() }
+func (w *timerWrapper) Stop() bool          { return w.timer.Stop() }
+func (w *timerWrapper) Reset(d time.Duration) bool {
+	w.resets = append(w.resets, d)
+	b := w.timer.Reset(d)
+	if w.onReset != nil {
+		w.onReset(d)
+	}
+	return b
+}
+
+func Test_loopConditionUntilContext_timings(t *testing.T) {
+	// defaultCallback := func(_ int) (bool, error) {
+	// 	return false, nil
+	// }
+
+	// conditionErr := errors.New("condition failed")
+
+	tests := []struct {
+		name               string
+		delayFn            DelayFunc
+		immediate          bool
+		sliding            bool
+		context            func() (context.Context, context.CancelFunc)
+		callback           func(calls int, lastInterval time.Duration) (bool, error)
+		cancelContextAfter int
+		attemptsExpected   int
+		errExpected        error
+		expectedIntervals  func(t *testing.T, delays []time.Duration, delaysRequested []time.Duration)
+	}{
+		{
+			name:    "condition success",
+			delayFn: Backoff{Duration: time.Second, Steps: 2, Factor: 2.0, Jitter: 0}.delayFunc(),
+			callback: func(attempts int, _ time.Duration) (bool, error) {
+				return true, nil
+			},
+			attemptsExpected: 1,
+			expectedIntervals: func(t *testing.T, delays []time.Duration, delaysRequested []time.Duration) {
+				if reflect.DeepEqual(delays, []time.Duration{time.Second, 2 * time.Second}) {
+					return
+				}
+				if reflect.DeepEqual(delaysRequested, []time.Duration{time.Second}) {
+					return
+				}
+			},
+		},
+		{
+			name:      "condition success",
+			immediate: true,
+			delayFn:   Backoff{Duration: time.Second, Steps: 2, Factor: 2.0, Jitter: 0}.delayFunc(),
+			callback: func(attempts int, _ time.Duration) (bool, error) {
+				return true, nil
+			},
+			attemptsExpected: 1,
+			expectedIntervals: func(t *testing.T, delays []time.Duration, delaysRequested []time.Duration) {
+				if reflect.DeepEqual(delays, []time.Duration{time.Second}) {
+					return
+				}
+				if reflect.DeepEqual(delaysRequested, []time.Duration{}) {
+					return
+				}
+			},
+		},
+		{
+			name:    "condition success",
+			sliding: true,
+			delayFn: Backoff{Duration: time.Second, Steps: 2, Factor: 2.0, Jitter: 0}.delayFunc(),
+			callback: func(attempts int, _ time.Duration) (bool, error) {
+				return true, nil
+			},
+			attemptsExpected: 1,
+			expectedIntervals: func(t *testing.T, delays []time.Duration, delaysRequested []time.Duration) {
+				if reflect.DeepEqual(delays, []time.Duration{time.Second}) {
+					return
+				}
+				if !reflect.DeepEqual(delays, delaysRequested) {
+					t.Fatalf("sliding non-immediate should have equal delays: %v", cmp.Diff(delays, delaysRequested))
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(fmt.Sprintf("%s/sliding=%t/immediate=%t", test.name, test.sliding, test.immediate), func(t *testing.T) {
+			contextFn := test.context
+			if contextFn == nil {
+				contextFn = defaultContext
+			}
+			ctx, cancel := contextFn()
+			defer cancel()
+
+			fakeClock := &testingclock.FakeClock{}
+			var fakeTimers []*timerWrapper
+			timerFn := func(d time.Duration) clock.Timer {
+				t := fakeClock.NewTimer(d)
+				fakeClock.Step(d + 1)
+				w := &timerWrapper{timer: t, resets: []time.Duration{d}, onReset: func(d time.Duration) {
+					fakeClock.Step(d + 1)
+				}}
+				fakeTimers = append(fakeTimers, w)
+				return w
+			}
+
+			delayFn := test.delayFn
+			if delayFn == nil {
+				delayFn = Backoff{Duration: time.Microsecond}.delayFunc()
+			}
+			var delays []time.Duration
+			wrappedDelayFn := func() time.Duration {
+				d := delayFn()
+				delays = append(delays, d)
+				return d
+			}
+			timer := &variableTimer{fn: wrappedDelayFn, new: timerFn}
+
+			attempts := 0
+			err := loopConditionUntilContext(ctx, timer, test.immediate, test.sliding, func(_ context.Context) (bool, error) {
+				attempts++
+				defer func() {
+					if test.cancelContextAfter > 0 && test.cancelContextAfter == attempts {
+						cancel()
+					}
+				}()
+				lastInterval := time.Duration(-1)
+				if len(delays) > 0 {
+					lastInterval = delays[len(delays)-1]
+				}
+				return test.callback(attempts, lastInterval)
+			})
+
+			if test.errExpected != err {
+				t.Errorf("expected error: %v but got: %v", test.errExpected, err)
+			}
+
+			if test.attemptsExpected != attempts {
+				t.Errorf("expected attempts count: %d but got: %d", test.attemptsExpected, attempts)
+			}
+			switch len(fakeTimers) {
+			case 0:
+				test.expectedIntervals(t, delays, nil)
+			case 1:
+				test.expectedIntervals(t, delays, fakeTimers[0].resets)
+			default:
+				t.Fatalf("expected zero or one timers: %#v", fakeTimers)
+			}
+		})
+	}
+}
+
+func Test_loopConditionUntilContext_Elapsed(t *testing.T) {
+	t.Run("variable timer with jitter", func(t *testing.T) {
+		var attempts int
+		start := time.Now()
+		if err := loopConditionUntilContext(context.Background(), Backoff{Duration: time.Millisecond, Jitter: 1.0}.Timer(), false, false, func(_ context.Context) (bool, error) {
+			attempts++
+			if attempts > 11 {
+				t.Fatalf("should not reached 11 attempts")
+			}
+			return attempts > 10, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		duration := time.Since(start)
+		if duration < 10*time.Millisecond {
+			t.Fatalf("total duration is less than 10 milliseconds: %v", duration)
+		}
+		// TODO: this may be too aggressive, but the overhead should be minor
+		if duration > 21*time.Millisecond {
+			t.Fatalf("total duration is more than 21 milliseconds: %v", duration)
+		}
+	})
+	t.Run("fixed timer", func(t *testing.T) {
+		var attempts int
+		start := time.Now()
+		if err := loopConditionUntilContext(context.Background(), Backoff{Duration: time.Millisecond}.Timer(), false, false, func(_ context.Context) (bool, error) {
+			attempts++
+			if attempts > 11 {
+				t.Fatalf("should not reached 11 attempts")
+			}
+			return attempts > 10, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		duration := time.Since(start)
+		if duration < 10*time.Millisecond {
+			t.Fatalf("total duration is less than 10 milliseconds: %v", duration)
+		}
+		// TODO: this may be too aggressive, but the overhead should be minor
+		if duration > 12*time.Millisecond {
+			t.Fatalf("total duration is more than 12 milliseconds: %v", duration)
+		}
+	})
+	t.Run("no-op timer", func(t *testing.T) {
+		var attempts int
+		start := time.Now()
+		if err := loopConditionUntilContext(context.Background(), Backoff{Duration: 0}.Timer(), false, false, func(_ context.Context) (bool, error) {
+			attempts++
+			if attempts > 11 {
+				t.Fatalf("should not reached 11 attempts")
+			}
+			return attempts > 10, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		duration := time.Since(start)
+		// TODO: this may be too aggressive, but the overhead should be minor
+		if duration > 1*time.Millisecond {
+			t.Fatalf("total duration is more than 1 milliseconds: %v", duration)
+		}
+	})
+}
+
+func BenchmarkExponentialBackoffWithContext(b *testing.B) {
+	backoff := Backoff{
+		Duration: 0,
+		Factor:   0,
+		Steps:    101,
+	}
+	ctx := context.Background()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		attempts := 0
+		if err := ExponentialBackoffWithContext(ctx, backoff, func(_ context.Context) (bool, error) {
+			attempts++
+			return attempts >= 100, nil
+		}); err != nil {
+			b.Fatalf("unexpected err: %v", err)
+		}
 	}
 }
 
@@ -929,9 +1414,7 @@ func TestPollImmediateUntilWithContext(t *testing.T) {
 					return false, fakeErr
 				}
 			},
-			context: func() (context.Context, context.CancelFunc) {
-				return context.WithCancel(context.Background())
-			},
+			context:          defaultContext,
 			errExpected:      fakeErr,
 			attemptsExpected: 1,
 		},
@@ -942,9 +1425,7 @@ func TestPollImmediateUntilWithContext(t *testing.T) {
 					return true, nil
 				}
 			},
-			context: func() (context.Context, context.CancelFunc) {
-				return context.WithCancel(context.Background())
-			},
+			context:          defaultContext,
 			errExpected:      nil,
 			attemptsExpected: 1,
 		},
@@ -955,12 +1436,8 @@ func TestPollImmediateUntilWithContext(t *testing.T) {
 					return false, nil
 				}
 			},
-			context: func() (context.Context, context.CancelFunc) {
-				ctx, cancel := context.WithCancel(context.Background())
-				defer cancel()
-				return ctx, cancel
-			},
-			errExpected:      ErrWaitTimeout,
+			context:          cancelledContext,
+			errExpected:      ErrWaitTimeout, // this should be context.Canceled, but this method cannot change
 			attemptsExpected: 1,
 		},
 		{
@@ -974,9 +1451,7 @@ func TestPollImmediateUntilWithContext(t *testing.T) {
 					return true, nil
 				}
 			},
-			context: func() (context.Context, context.CancelFunc) {
-				return context.WithCancel(context.Background())
-			},
+			context:          defaultContext,
 			errExpected:      nil,
 			attemptsExpected: 4,
 		},
@@ -987,9 +1462,7 @@ func TestPollImmediateUntilWithContext(t *testing.T) {
 					return false, nil
 				}
 			},
-			context: func() (context.Context, context.CancelFunc) {
-				return context.WithCancel(context.Background())
-			},
+			context:                      defaultContext,
 			cancelContextAfterNthAttempt: 4,
 			errExpected:                  ErrWaitTimeout,
 			attemptsExpected:             4,
@@ -998,7 +1471,11 @@ func TestPollImmediateUntilWithContext(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ctx, cancel := test.context()
+			contextFn := test.context
+			if contextFn == nil {
+				contextFn = defaultContext
+			}
+			ctx, cancel := contextFn()
 			defer cancel()
 
 			var attempts int
@@ -1036,10 +1513,8 @@ func Test_waitForWithContext(t *testing.T) {
 		errExpected      error
 	}{
 		{
-			name: "condition returns done=true on first attempt, no retry is attempted",
-			context: func() (context.Context, context.CancelFunc) {
-				return context.WithCancel(context.Background())
-			},
+			name:    "condition returns done=true on first attempt, no retry is attempted",
+			context: defaultContext,
 			condition: ConditionWithContextFunc(func(context.Context) (bool, error) {
 				return true, nil
 			}),
@@ -1048,10 +1523,8 @@ func Test_waitForWithContext(t *testing.T) {
 			errExpected:      nil,
 		},
 		{
-			name: "condition always returns done=false, timeout error expected",
-			context: func() (context.Context, context.CancelFunc) {
-				return context.WithCancel(context.Background())
-			},
+			name:    "condition always returns done=false, timeout error expected",
+			context: defaultContext,
 			condition: ConditionWithContextFunc(func(context.Context) (bool, error) {
 				return false, nil
 			}),
@@ -1061,10 +1534,8 @@ func Test_waitForWithContext(t *testing.T) {
 			errExpected:      ErrWaitTimeout,
 		},
 		{
-			name: "condition returns an error on first attempt, the error is returned",
-			context: func() (context.Context, context.CancelFunc) {
-				return context.WithCancel(context.Background())
-			},
+			name:    "condition returns an error on first attempt, the error is returned",
+			context: defaultContext,
 			condition: ConditionWithContextFunc(func(context.Context) (bool, error) {
 				return false, fakeErr
 			}),
@@ -1073,12 +1544,8 @@ func Test_waitForWithContext(t *testing.T) {
 			errExpected:      fakeErr,
 		},
 		{
-			name: "context is cancelled, context cancelled error expected",
-			context: func() (context.Context, context.CancelFunc) {
-				ctx, cancel := context.WithCancel(context.Background())
-				cancel()
-				return ctx, cancel
-			},
+			name:    "context is cancelled, context cancelled error expected",
+			context: cancelledContext,
 			condition: ConditionWithContextFunc(func(context.Context) (bool, error) {
 				return false, nil
 			}),
@@ -1104,7 +1571,11 @@ func Test_waitForWithContext(t *testing.T) {
 
 			ticker := test.waitFunc()
 			err := func() error {
-				ctx, cancel := test.context()
+				contextFn := test.context
+				if contextFn == nil {
+					contextFn = defaultContext
+				}
+				ctx, cancel := contextFn()
 				defer cancel()
 
 				return waitForWithContext(ctx, ticker.WithContext(), conditionWrapper)
@@ -1135,13 +1606,6 @@ func TestPollInternal(t *testing.T) {
 		{
 			name:      "immediate is true, condition returns an error",
 			immediate: true,
-			context: func() (context.Context, context.CancelFunc) {
-				// use a cancelled context, we want to make sure the
-				// condition is expected to be invoked immediately.
-				ctx, cancel := context.WithCancel(context.Background())
-				defer cancel()
-				return ctx, cancel
-			},
 			condition: ConditionWithContextFunc(func(context.Context) (bool, error) {
 				return false, fakeErr
 			}),
@@ -1152,13 +1616,6 @@ func TestPollInternal(t *testing.T) {
 		{
 			name:      "immediate is true, condition returns true",
 			immediate: true,
-			context: func() (context.Context, context.CancelFunc) {
-				// use a cancelled context, we want to make sure the
-				// condition is expected to be invoked immediately.
-				ctx, cancel := context.WithCancel(context.Background())
-				defer cancel()
-				return ctx, cancel
-			},
 			condition: ConditionWithContextFunc(func(context.Context) (bool, error) {
 				return true, nil
 			}),
@@ -1169,13 +1626,7 @@ func TestPollInternal(t *testing.T) {
 		{
 			name:      "immediate is true, context is cancelled, condition return false",
 			immediate: true,
-			context: func() (context.Context, context.CancelFunc) {
-				// use a cancelled context, we want to make sure the
-				// condition is expected to be invoked immediately.
-				ctx, cancel := context.WithCancel(context.Background())
-				defer cancel()
-				return ctx, cancel
-			},
+			context:   cancelledContext,
 			condition: ConditionWithContextFunc(func(context.Context) (bool, error) {
 				return false, nil
 			}),
@@ -1186,13 +1637,7 @@ func TestPollInternal(t *testing.T) {
 		{
 			name:      "immediate is false, context is cancelled",
 			immediate: false,
-			context: func() (context.Context, context.CancelFunc) {
-				// use a cancelled context, we want to make sure the
-				// condition is expected to be invoked immediately.
-				ctx, cancel := context.WithCancel(context.Background())
-				defer cancel()
-				return ctx, cancel
-			},
+			context:   cancelledContext,
 			condition: ConditionWithContextFunc(func(context.Context) (bool, error) {
 				return false, nil
 			}),
@@ -1203,9 +1648,6 @@ func TestPollInternal(t *testing.T) {
 		{
 			name:      "immediate is false, condition returns an error",
 			immediate: false,
-			context: func() (context.Context, context.CancelFunc) {
-				return context.WithCancel(context.Background())
-			},
 			condition: ConditionWithContextFunc(func(context.Context) (bool, error) {
 				return false, fakeErr
 			}),
@@ -1216,9 +1658,6 @@ func TestPollInternal(t *testing.T) {
 		{
 			name:      "immediate is false, condition returns true",
 			immediate: false,
-			context: func() (context.Context, context.CancelFunc) {
-				return context.WithCancel(context.Background())
-			},
 			condition: ConditionWithContextFunc(func(context.Context) (bool, error) {
 				return true, nil
 			}),
@@ -1229,9 +1668,6 @@ func TestPollInternal(t *testing.T) {
 		{
 			name:      "immediate is false, ticker channel is closed, condition returns true",
 			immediate: false,
-			context: func() (context.Context, context.CancelFunc) {
-				return context.WithCancel(context.Background())
-			},
 			condition: ConditionWithContextFunc(func(context.Context) (bool, error) {
 				return true, nil
 			}),
@@ -1248,9 +1684,6 @@ func TestPollInternal(t *testing.T) {
 		{
 			name:      "immediate is false, ticker channel is closed, condition returns error",
 			immediate: false,
-			context: func() (context.Context, context.CancelFunc) {
-				return context.WithCancel(context.Background())
-			},
 			condition: ConditionWithContextFunc(func(context.Context) (bool, error) {
 				return false, fakeErr
 			}),
@@ -1267,9 +1700,6 @@ func TestPollInternal(t *testing.T) {
 		{
 			name:      "immediate is false, ticker channel is closed, condition returns false",
 			immediate: false,
-			context: func() (context.Context, context.CancelFunc) {
-				return context.WithCancel(context.Background())
-			},
 			condition: ConditionWithContextFunc(func(context.Context) (bool, error) {
 				return false, nil
 			}),
@@ -1286,9 +1716,6 @@ func TestPollInternal(t *testing.T) {
 		{
 			name:      "condition always returns false, timeout error expected",
 			immediate: false,
-			context: func() (context.Context, context.CancelFunc) {
-				return context.WithCancel(context.Background())
-			},
 			condition: ConditionWithContextFunc(func(context.Context) (bool, error) {
 				return false, nil
 			}),
@@ -1300,9 +1727,6 @@ func TestPollInternal(t *testing.T) {
 		{
 			name:      "context is cancelled after N attempts, timeout error expected",
 			immediate: false,
-			context: func() (context.Context, context.CancelFunc) {
-				return context.WithCancel(context.Background())
-			},
 			condition: ConditionWithContextFunc(func(context.Context) (bool, error) {
 				return false, nil
 			}),
@@ -1333,7 +1757,11 @@ func TestPollInternal(t *testing.T) {
 				ticker = test.waitFunc()
 			}
 			err := func() error {
-				ctx, cancel := test.context()
+				contextFn := test.context
+				if contextFn == nil {
+					contextFn = defaultContext
+				}
+				ctx, cancel := contextFn()
 				defer cancel()
 
 				conditionWrapper := func(ctx context.Context) (done bool, err error) {
@@ -1358,5 +1786,47 @@ func TestPollInternal(t *testing.T) {
 				t.Errorf("Expected %d invocations, got %d", test.attemptsExpected, attempts)
 			}
 		})
+	}
+}
+
+func Benchmark_poll(b *testing.B) {
+	ctx := context.Background()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		attempts := 0
+		if err := poll(ctx, true, poller(time.Microsecond, 0), func(_ context.Context) (bool, error) {
+			attempts++
+			return attempts >= 100, nil
+		}); err != nil {
+			b.Fatalf("unexpected err: %v", err)
+		}
+	}
+}
+
+func Benchmark_loopConditionUntilContext_ZeroDuration(b *testing.B) {
+	ctx := context.Background()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		attempts := 0
+		if err := loopConditionUntilContext(ctx, Backoff{Duration: 0}.Timer(), true, false, func(_ context.Context) (bool, error) {
+			attempts++
+			return attempts >= 100, nil
+		}); err != nil {
+			b.Fatalf("unexpected err: %v", err)
+		}
+	}
+}
+
+func Benchmark_loopConditionUntilContext_ShortDuration(b *testing.B) {
+	ctx := context.Background()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		attempts := 0
+		if err := loopConditionUntilContext(ctx, Backoff{Duration: time.Microsecond}.Timer(), true, false, func(_ context.Context) (bool, error) {
+			attempts++
+			return attempts >= 100, nil
+		}); err != nil {
+			b.Fatalf("unexpected err: %v", err)
+		}
 	}
 }
