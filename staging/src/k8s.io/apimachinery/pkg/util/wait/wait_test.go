@@ -540,9 +540,9 @@ func Test_waitFor(t *testing.T) {
 	}
 }
 
-// Test_waitForWithEarlyClosing_waitFunc tests waitFor when the waitFunc closes its channel. The waitFor should
+// TestWaitForWithEarlyClosingwaitFunc tests WaitFor when the waitFunc closes its channel. The WaitFor should
 // always return ErrWaitTimeout.
-func Test_waitForWithEarlyClosing_waitFunc(t *testing.T) {
+func TestWaitForWithEarlyClosingwaitFunc(t *testing.T) {
 	stopCh := make(chan struct{})
 	defer close(stopCh)
 
@@ -562,7 +562,7 @@ func Test_waitForWithEarlyClosing_waitFunc(t *testing.T) {
 		t.Errorf("expected short timeout duration")
 	}
 	if err != ErrWaitTimeout {
-		t.Errorf("expected ErrWaitTimeout from WaitFunc")
+		t.Errorf("expected ErrWaitTimeout from waitFunc")
 	}
 }
 
@@ -588,7 +588,7 @@ func Test_waitForWithClosedChannel(t *testing.T) {
 	}
 	// The interval of the poller is ForeverTestTimeout, so the waitFor should always return ErrWaitTimeout.
 	if err != ErrWaitTimeout {
-		t.Errorf("expected ErrWaitTimeout from WaitFunc")
+		t.Errorf("expected ErrWaitTimeout from waitFunc")
 	}
 }
 
