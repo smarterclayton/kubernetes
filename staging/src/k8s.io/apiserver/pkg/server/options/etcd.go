@@ -228,8 +228,10 @@ func (s *EtcdOptions) Complete(
 	}
 
 	if len(s.EncryptionProviderConfigFilepath) != 0 {
-		ctxTransformers, closeTransformers := wait.ContextForChannel(stopCh)
-		ctxServer, _ := wait.ContextForChannel(stopCh) // explicitly ignore cancel here because we do not own the server's lifecycle
+		baseCtx := wait.ContextForChannel(stopCh)
+		ctxTransformers, closeTransformers := context.WithCancel(baseCtx)
+
+		ctxServer := wait.ContextForChannel(stopCh) // explicitly ignore cancel here because we do not own the server's lifecycle
 
 		encryptionConfiguration, err := encryptionconfig.LoadEncryptionConfig(ctxTransformers, s.EncryptionProviderConfigFilepath, s.EncryptionProviderConfigAutomaticReload)
 		if err != nil {
