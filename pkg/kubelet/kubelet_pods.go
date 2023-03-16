@@ -102,9 +102,9 @@ func (kl *Kubelet) listPodsFromDisk() ([]types.UID, error) {
 // deleted but may still be terminating, which means resources assigned to
 // those pods during admission may still be in use. See
 // https://github.com/kubernetes/kubernetes/issues/104824
-func (kl *Kubelet) GetActivePods() []*v1.Pod {
+func (kl *Kubelet) xx_GetActivePods() []*v1.Pod {
 	allPods := kl.podManager.GetPods()
-	activePods := kl.filterOutInactivePods(allPods)
+	activePods := kl.xx_filterOutInactivePods(allPods)
 	return activePods
 }
 
@@ -989,7 +989,7 @@ func (kl *Kubelet) podResourcesAreReclaimed(pod *v1.Pod) bool {
 // or are known to be fully terminated. This method should only be used
 // when the set of pods being filtered is upstream of the pod worker, i.e.
 // the pods the pod manager is aware of.
-func (kl *Kubelet) filterOutInactivePods(pods []*v1.Pod) []*v1.Pod {
+func (kl *Kubelet) xx_filterOutInactivePods(pods []*v1.Pod) []*v1.Pod {
 	filteredPods := make([]*v1.Pod, 0, len(pods))
 	for _, p := range pods {
 		// if a pod is fully terminated by UID, it should be excluded from the

@@ -123,6 +123,9 @@ const (
 	// SyncPodKill is when the pod should have no running containers. A pod stopped in this way could be
 	// restarted in the future due config changes.
 	SyncPodKill
+	// SyncPodReject is when the pod should no longer be run. A pod rejected in this way may not be
+	// restarted until it is recreated (we observe a delete and then a creation).
+	SyncPodReject
 )
 
 func (sp SyncPodType) String() string {
@@ -135,6 +138,8 @@ func (sp SyncPodType) String() string {
 		return "sync"
 	case SyncPodKill:
 		return "kill"
+	case SyncPodReject:
+		return "reject"
 	default:
 		return "unknown"
 	}

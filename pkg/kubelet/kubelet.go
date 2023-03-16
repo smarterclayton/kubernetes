@@ -865,7 +865,7 @@ func NewMainKubelet(kubeCfg *kubeletconfiginternal.KubeletConfiguration,
 
 	klet.admitHandlers.AddPodAdmitHandler(klet.containerManager.GetAllocateResourcesPodAdmitHandler())
 
-	criticalPodAdmissionHandler := preemption.NewCriticalPodAdmissionHandler(klet.GetActivePods, killPodNow(klet.podWorkers, kubeDeps.Recorder), kubeDeps.Recorder)
+	criticalPodAdmissionHandler := preemption.NewCriticalPodAdmissionHandler(klet.podWorkers.ActivePods, killPodNow(klet.podWorkers, kubeDeps.Recorder), kubeDeps.Recorder)
 	klet.admitHandlers.AddPodAdmitHandler(lifecycle.NewPredicateAdmitHandler(klet.getNodeAnyWay, criticalPodAdmissionHandler, klet.containerManager.UpdatePluginResources))
 	// apply functional Option's
 	for _, opt := range kubeDeps.Options {
@@ -897,7 +897,7 @@ func NewMainKubelet(kubeCfg *kubeletconfiginternal.KubeletConfiguration,
 		ProbeManager:                     klet.probeManager,
 		Recorder:                         kubeDeps.Recorder,
 		NodeRef:                          nodeRef,
-		GetPodsFunc:                      klet.GetActivePods,
+		GetPodsFunc:                      klet.podWorkers.ActivePods,
 		KillPodFunc:                      killPodNow(klet.podWorkers, kubeDeps.Recorder),
 		SyncNodeStatusFunc:               klet.syncNodeStatus,
 		ShutdownGracePeriodRequested:     kubeCfg.ShutdownGracePeriod.Duration,
@@ -1534,13 +1534,13 @@ func (kl *Kubelet) initializeRuntimeDependentModules() {
 		os.Exit(1)
 	}
 	// containerManager must start after cAdvisor because it needs filesystem capacity information
-	if err := kl.containerManager.Start(node, kl.GetActivePods, kl.sourcesReady, kl.statusManager, kl.runtimeService, kl.supportLocalStorageCapacityIsolation()); err != nil {
+	if err := kl.containerManager.Start(node, kl.podWorkers.ActivePods, kl.sourcesReady, kl.statusManager, kl.runtimeService, kl.supportLocalStorageCapacityIsolation()); err != nil {
 		// Fail kubelet and rely on the babysitter to retry starting kubelet.
 		klog.ErrorS(err, "Failed to start ContainerManager")
 		os.Exit(1)
 	}
 	// eviction manager must start after cadvisor because it needs to know if the container runtime has a dedicated imagefs
-	kl.evictionManager.Start(kl.StatsProvider, kl.GetActivePods, kl.podResourcesAreReclaimed, evictionMonitoringPeriod)
+	kl.evictionManager.Start(kl.StatsProvider, kl.podWorkers.ActivePods, kl.podResourcesAreReclaimed, evictionMonitoringPeriod)
 
 	// container log manager must start after container runtime is up to retrieve information from container runtime
 	// and inform container to reopen log file after log rotation.
@@ -2274,7 +2274,10 @@ func (kl *Kubelet) canAdmitPod(pods []*v1.Pod, pod *v1.Pod) (bool, string, strin
 func (kl *Kubelet) canRunPod(pod *v1.Pod) lifecycle.PodAdmitResult {
 	attrs := &lifecycle.PodAdmitAttributes{Pod: pod}
 	// Get "OtherPods". Rejected pods are failed, so only include admitted pods that are alive.
-	attrs.OtherPods = kl.GetActivePods()
+	// TODO: this should exclude the current pod (it's admitted, but not active)
+	// TODO: in theory this could just be inside pod workers start pod, but probably not worth
+	// moving now
+	attrs.OtherPods = kl.podWorkers.ActivePods()
 
 	for _, handler := range kl.softAdmitHandlers {
 		if result := handler.Admit(attrs); !result.Admit {
@@ -2490,12 +2493,9 @@ func handleProbeSync(kl *Kubelet, update proberesults.Update, handler SyncHandle
 func (kl *Kubelet) HandlePodAdditions(pods []*v1.Pod) {
 	start := kl.clock.Now()
 	sort.Sort(sliceutils.PodsByCreationTime(pods))
-	if utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling) {
-		kl.podResizeMutex.Lock()
-		defer kl.podResizeMutex.Unlock()
-	}
+
+	var activePods []*v1.Pod
 	for _, pod := range pods {
-		existingPods := kl.podManager.GetPods()
 		// Always add the pod to the pod manager. Kubelet relies on the pod
 		// manager as the source of truth for the desired state. If a pod does
 		// not exist in the pod manager, it means that it has been deleted in
@@ -2517,46 +2517,23 @@ func (kl *Kubelet) HandlePodAdditions(pods []*v1.Pod) {
 			continue
 		}
 
-		// Only go through the admission process if the pod is not requested
-		// for termination by another part of the kubelet. If the pod is already
-		// using resources (previously admitted), the pod worker is going to be
-		// shutting it down. If the pod hasn't started yet, we know that when
-		// the pod worker is invoked it will also avoid setting up the pod, so
-		// we simply avoid doing any work.
-		if !kl.podWorkers.IsPodTerminationRequested(pod.UID) {
-			// We failed pods that we rejected, so activePods include all admitted
-			// pods that are alive.
-			activePods := kl.filterOutInactivePods(existingPods)
-
-			if utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling) {
-				// To handle kubelet restarts, test pod admissibility using AllocatedResources values
-				// (for cpu & memory) from checkpoint store. If found, that is the source of truth.
-				podCopy := pod.DeepCopy()
-				for _, c := range podCopy.Spec.Containers {
-					allocatedResources, found := kl.statusManager.GetContainerResourceAllocation(string(pod.UID), c.Name)
-					if c.Resources.Requests != nil && found {
-						c.Resources.Requests[v1.ResourceCPU] = allocatedResources[v1.ResourceCPU]
-						c.Resources.Requests[v1.ResourceMemory] = allocatedResources[v1.ResourceMemory]
-					}
-				}
-				// Check if we can admit the pod; if not, reject it.
-				if ok, reason, message := kl.canAdmitPod(activePods, podCopy); !ok {
-					kl.rejectPod(pod, reason, message)
-					continue
-				}
-				// For new pod, checkpoint the resource values at which the Pod has been admitted
-				if err := kl.statusManager.SetPodAllocation(podCopy); err != nil {
-					//TODO(vinaykul,InPlacePodVerticalScaling): Can we recover from this in some way? Investigate
-					klog.ErrorS(err, "SetPodAllocation failed", "pod", klog.KObj(pod))
-				}
-			} else {
-				// Check if we can admit the pod; if not, reject it.
-				if ok, reason, message := kl.canAdmitPod(activePods, pod); !ok {
-					kl.rejectPod(pod, reason, message)
-					continue
-				}
-			}
+		if activePods == nil {
+			activePods = kl.podWorkers.ActivePods()
 		}
+
+		// Check if we can admit the pod; if not, reject it.
+		if ok, reason, message := kl.canAdmitPod(activePods, pod); !ok {
+			kl.podWorkers.UpdatePod(UpdatePodOptions{
+				Pod:        pod,
+				UpdateType: kubetypes.SyncPodReject,
+				RejectPodOptions: &RejectPodOptions{PodStatusFunc: func(status *v1.PodStatus) {
+					status.Reason = reason
+					status.Message = message
+				}},
+			})
+			continue
+		}
+
 		kl.podWorkers.UpdatePod(UpdatePodOptions{
 			Pod:        pod,
 			MirrorPod:  mirrorPod,
@@ -2726,7 +2703,10 @@ func (kl *Kubelet) canResizePod(pod *v1.Pod) (bool, *v1.Pod, v1.PodResizeStatus)
 
 	// Treat the existing pod needing resize as a new pod with desired resources seeking admit.
 	// If desired resources don't fit, pod continues to run with currently allocated resources.
-	activePods := kl.GetActivePods()
+	// TODO: we probably should not allow the pod worker to see non admitted changes, which means
+	// that update/sync/reconcile should be checking for admission, and an admission that fails
+	// should be retried during HandlePodCleanups?
+	activePods := kl.podWorkers.ActivePods()
 	for _, p := range activePods {
 		if p.UID != pod.UID {
 			otherActivePods = append(otherActivePods, p)

@@ -63,9 +63,13 @@ type KillPodOptions struct {
 	PodTerminationGracePeriodSecondsOverride *int64
 }
 
+type RejectPodOptions struct {
+	PodStatusFunc PodStatusFunc
+}
+
 // UpdatePodOptions is an options struct to pass to a UpdatePod operation.
 type UpdatePodOptions struct {
-	// The type of update (create, update, sync, kill).
+	// The type of update (create, update, sync, kill, reject).
 	UpdateType kubetypes.SyncPodType
 	// StartTime is an optional timestamp for when this update was created. If set,
 	// when this update is fully realized by the pod worker it will be recorded in
@@ -85,6 +89,8 @@ type UpdatePodOptions struct {
 	// and later kills have an opportunity to override the status (i.e. a preemption
 	// may be later turned into an eviction).
 	KillPodOptions *KillPodOptions
+	// RejectPodOptions describes optional behavior for a pod rejection.
+	RejectPodOptions *RejectPodOptions
 }
 
 // PodWorkType classifies the status of pod as seen by the pod worker - setup (sync),
@@ -141,15 +147,20 @@ type podWork struct {
 // PodWorkers is an abstract interface for testability.
 type PodWorkers interface {
 	// UpdatePod notifies the pod worker of a change to a pod, which will then
-	// be processed in FIFO order by a goroutine per pod UID. The state of the
-	// pod will be passed to the syncPod method until either the pod is marked
-	// as deleted, it reaches a terminal phase (Succeeded/Failed), or the pod
-	// is evicted by the kubelet. Once that occurs the syncTerminatingPod method
-	// will be called until it exits successfully, and after that all further
+	// be propagated to a per-pod goroutine that drives the pod's state machine.
+	// The state of the pod will be passed to the syncPod method until either the
+	// pod is marked as deleted, it reaches a terminal phase (Succeeded/Failed),
+	// or the pod is evicted by the kubelet. Once that occurs the syncTerminatingPod
+	// method will be called until it exits successfully, and after that all further
 	// UpdatePod() calls will be ignored for that pod until it has been forgotten
 	// due to significant time passing. A pod that is terminated will never be
-	// restarted.
+	// restarted. The SyncPodUpdateType describes the expected desired lifecycle -
+	// a create or update will modify what is being run, kill will begin the
+	// termination process, and reject will prevent the pod from ever starting.
 	UpdatePod(options UpdatePodOptions)
+	// ActivePods returns a list of all pods that have not yet run to completion.
+	// This list is what admission decisions will be compared against.
+	ActivePods() []*v1.Pod
 	// SyncKnownPods removes workers for pods that are not in the desiredPods set
 	// and have been terminated for a significant period of time. Once this method
 	// has been called once, the workers are assumed to be fully initialized and
